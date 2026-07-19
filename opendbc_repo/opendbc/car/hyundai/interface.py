@@ -164,7 +164,8 @@ class CarInterface(CarInterfaceBase):
       # NEXO: enable and verify MANDO radar tracks before disabling normal SCC
       # communication. Failure is fail-closed so longitudinal control cannot
       # start with an unverified radar state or a hidden AEB/FCW fault.
-      if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and communication_control[1] & 0x80:
+      disabling_normal_comms = communication_control[1] == (0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX)
+      if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and disabling_normal_comms:
         if not enable_radar_tracks(can_recv, can_send, bus, retries=5):
           raise RuntimeError("NEXO radar track activation failed; refusing longitudinal control")
 
