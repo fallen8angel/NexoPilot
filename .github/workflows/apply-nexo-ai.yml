@@ -1,0 +1,56 @@
+name: Apply NEXO AI configuration
+
+on:
+  push:
+    branches: [NEXO]
+    paths:
+      - '.github/workflows/apply-nexo-ai.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: NEXO
+          fetch-depth: 0
+
+      - name: Apply NEXO AI vehicle information
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('opendbc_repo/opendbc/car/hyundai/values.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''  HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
+    [HyundaiCarDocs("Hyundai Nexo 2021", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
+    CarSpecs(mass=3990 * CV.LB_TO_KG, wheelbase=2.79, steerRatio=14.19),  # https://www.hyundainews.com/assets/documents/original/42768-2021NEXOProductGuideSpecs.pdf
+    flags=HyundaiFlags.FCEV,
+  )'''
+
+          new = '''  HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
+    [HyundaiCarDocs("HYUNDAI NEXO", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
+    CarSpecs(mass=1885, wheelbase=2.79, steerRatio=14.19, tireStiffnessFactor=0.385),
+    flags=HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR,
+  )'''
+
+          if old in text:
+            text = text.replace(old, new, 1)
+          elif new not in text:
+            raise SystemExit('NEXO configuration block not found; no files changed')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/apply-nexo-ai.yml
+
+          git config user.name "NexoPilot Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add opendbc_repo/opendbc/car/hyundai/values.py .github/workflows/apply-nexo-ai.yml
+          git commit -m "Apply NEXO AI vehicle configuration"
+          git push origin NEXO
