@@ -17,9 +17,16 @@ OLD_BLOCK = '''  HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
     flags=HyundaiFlags.FCEV,
   )'''
 
-NEW_BLOCK = '''  HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
+PREVIOUS_BLOCK = '''  HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
     [HyundaiCarDocs("HYUNDAI NEXO", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
     CarSpecs(mass=1885, wheelbase=2.79, steerRatio=14.19, tireStiffnessFactor=0.385),
+    flags=HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR,
+  )'''
+
+NEW_BLOCK = '''  HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
+    [HyundaiCarDocs("HYUNDAI NEXO", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
+    CarSpecs(mass=1885, wheelbase=2.79, steerRatio=14.19, tireStiffnessFactor=0.385,
+             minEnableSpeed=10 * CV.KPH_TO_MS),
     flags=HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR,
   )'''
 
@@ -30,10 +37,12 @@ def main() -> None:
   if NEW_BLOCK in text:
     return
 
-  if OLD_BLOCK not in text:
-    raise RuntimeError(f"NEXO platform block was not found in {VALUES_PATH}")
+  for block in (PREVIOUS_BLOCK, OLD_BLOCK):
+    if block in text:
+      VALUES_PATH.write_text(text.replace(block, NEW_BLOCK, 1), encoding="utf-8")
+      return
 
-  VALUES_PATH.write_text(text.replace(OLD_BLOCK, NEW_BLOCK, 1), encoding="utf-8")
+  raise RuntimeError(f"NEXO platform block was not found in {VALUES_PATH}")
 
 
 if __name__ == "__main__":
