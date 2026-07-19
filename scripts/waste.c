@@ -11,7 +11,7 @@
 #include <pthread.h>
 #include <arm_neon.h>
 #include <sys/sysinfo.h>
-#include "../openpilot/common/timing.h"
+#include "../common/timing.h"
 
 int get_nprocs(void);
 double *ttime, *oout;
@@ -86,3 +86,4 @@ int main() {
     sleep(1);
   }
 }
+
