@@ -33,16 +33,18 @@ def enable_radar_tracks(can_recv, can_send, bus, retries=5) -> bool:
       # Confirm the value when the radar supports ReadDataByIdentifier.
       # Some firmware only acknowledges the write, so a valid write response
       # remains sufficient when read-back is unsupported.
+      read = None
       try:
         read = _query(can_recv, can_send, bus,
                       b"\x22" + RADAR_TRACK_CONFIG_DID,
                       b"\x62" + RADAR_TRACK_CONFIG_DID)
-        if read:
-          payload = next(iter(read.values()))
-          if RADAR_TRACK_CONFIG not in payload:
-            raise RuntimeError(f"unexpected radar configuration: {payload.hex()}")
       except Exception as read_error:
         carlog.warning(f"NEXO radar track read-back unavailable: {read_error}")
+
+      if read:
+        payload = next(iter(read.values()))
+        if RADAR_TRACK_CONFIG not in payload:
+          raise RuntimeError(f"unexpected radar configuration: {payload.hex()}")
 
       carlog.info(f"NEXO radar tracks enabled on attempt {attempt}")
       return True
