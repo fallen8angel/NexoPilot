@@ -33,6 +33,9 @@ GEAR_INIT_OLD = '''    self.params = CarControllerParams(CP)
 GEAR_INIT_NEW = '''    self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
+    # NEXO legacy cruise-state manager compatibility.
+    self.nexo_cruise_enabled = False
+    self.nexo_cruise_available = True
 '''
 
 GEAR_PARSE_OLD = '''    if self.CP.flags & (HyundaiFlags.HYBRID | HyundaiFlags.EV):
@@ -77,6 +80,40 @@ GEAR_PARSE_NEW = '''    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
 '''
 
+BUTTONS_OLD = '''    ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
+                        *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
+                        *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
+
+    ret.blockPcmEnable = not self.recent_button_interaction()
+'''
+
+BUTTONS_NEW = '''    ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
+                        *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
+                        *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
+
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      enable_pressed = any(be.pressed and be.type in (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.mainCruise)
+                           for be in ret.buttonEvents)
+      cancel_pressed = any(be.pressed and be.type == ButtonType.cancel for be in ret.buttonEvents)
+
+      if enable_pressed:
+        self.nexo_cruise_available = True
+        self.nexo_cruise_enabled = True
+
+      if cancel_pressed:
+        # First CANCEL exits enabled control. A second CANCEL while already
+        # disabled clears availability, matching the older MED-mode flow.
+        if not self.nexo_cruise_enabled:
+          self.nexo_cruise_available = False
+        self.nexo_cruise_enabled = False
+
+      ret.cruiseState.available = ret.cruiseState.available and self.nexo_cruise_available
+      if self.nexo_cruise_enabled:
+        ret.cruiseState.enabled = True
+
+    ret.blockPcmEnable = not self.recent_button_interaction()
+'''
+
 
 def patch_values() -> None:
   text = VALUES_PATH.read_text(encoding="utf-8")
@@ -88,12 +125,12 @@ def patch_values() -> None:
     raise RuntimeError(f"NEXO platform block was not found in {VALUES_PATH}")
 
 
-def patch_gear_values() -> None:
+def patch_carstate() -> None:
   text = CARSTATE_PATH.read_text(encoding="utf-8")
 
   if GEAR_INIT_NEW not in text:
     if GEAR_INIT_OLD not in text:
-      raise RuntimeError(f"NEXO gear initialization location was not found in {CARSTATE_PATH}")
+      raise RuntimeError(f"NEXO state initialization location was not found in {CARSTATE_PATH}")
     text = text.replace(GEAR_INIT_OLD, GEAR_INIT_NEW, 1)
 
   if GEAR_PARSE_NEW not in text:
@@ -101,12 +138,17 @@ def patch_gear_values() -> None:
       raise RuntimeError(f"NEXO gear parsing block was not found in {CARSTATE_PATH}")
     text = text.replace(GEAR_PARSE_OLD, GEAR_PARSE_NEW, 1)
 
+  if BUTTONS_NEW not in text:
+    if BUTTONS_OLD not in text:
+      raise RuntimeError(f"NEXO cruise button block was not found in {CARSTATE_PATH}")
+    text = text.replace(BUTTONS_OLD, BUTTONS_NEW, 1)
+
   CARSTATE_PATH.write_text(text, encoding="utf-8")
 
 
 def main() -> None:
   patch_values()
-  patch_gear_values()
+  patch_carstate()
 
 
 if __name__ == "__main__":
