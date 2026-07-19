@@ -31,6 +31,15 @@ def local_ip() -> str:
     sock.close()
 
 
+def run_command(args: list[str], timeout: int = 10, cwd: Path | None = None) -> tuple[int, str]:
+  try:
+    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=False)
+    output = (result.stdout + ("\n" + result.stderr if result.stderr else "")).strip()
+    return result.returncode, output or "출력 없음"
+  except Exception as error:
+    return -1, str(error)
+
+
 def git_run(*args: str, timeout: int = 20) -> subprocess.CompletedProcess[str]:
   return subprocess.run(["git", *args], cwd=REPO_DIR, text=True, capture_output=True,
                         timeout=timeout, check=False)
@@ -52,6 +61,8 @@ def car_status() -> dict[str, str]:
     "longitudinal": "확인 불가",
     "radar": "확인 불가",
     "dashcam": "확인 불가",
+    "fingerprint_source": "확인 불가",
+    "passive": "확인 불가",
   }
   if raw:
     try:
@@ -60,6 +71,8 @@ def car_status() -> dict[str, str]:
         result["longitudinal"] = "활성" if cp.openpilotLongitudinalControl else "비활성"
         result["radar"] = "사용 불가" if cp.radarUnavailable else "사용 가능"
         result["dashcam"] = "예" if cp.dashcamOnly else "아니오"
+        result["fingerprint_source"] = str(cp.fingerprintSource)
+        result["passive"] = "예" if cp.passive else "아니오"
     except Exception as error:
       result["car"] = f"CarParams 읽기 실패: {error}"
   return result
@@ -74,7 +87,7 @@ def force_nexo_enabled() -> bool:
 
 def clear_car_cache() -> None:
   params = Params()
-  for key in ("CarParams", "CarParamsCache", "CarParamsPersistent"):
+  for key in ("CarParams", "CarParamsCache", "CarParamsPersistent", "CarParamsPrevRoute"):
     try:
       params.remove(key)
     except Exception:
@@ -144,8 +157,84 @@ def perform_update() -> tuple[bool, str]:
   return True, merged.stdout.strip() or "최신 버전입니다."
 
 
+def tmux_output() -> str:
+  code, sessions = run_command(["tmux", "list-sessions", "-F", "#{session_name}"], timeout=3)
+  if code != 0:
+    return f"tmux 세션을 찾지 못했습니다.\n{sessions}"
+  session = sessions.splitlines()[0].strip()
+  _, output = run_command(["tmux", "capture-pane", "-p", "-t", session, "-S", "-300"], timeout=5)
+  return f"세션: {session}\n\n{output}"
+
+
+def process_output() -> str:
+  names = ("manager", "card", "pandad", "controlsd", "selfdrived", "radard", "nexo_web")
+  lines = []
+  for name in names:
+    code, output = run_command(["pgrep", "-af", name], timeout=3)
+    lines.append(f"[{name}]\n{output if code == 0 else '실행 중 아님'}")
+  return "\n\n".join(lines)
+
+
+def system_output() -> str:
+  blocks = []
+  commands = [
+    ("가동시간", ["uptime"]),
+    ("디스크", ["df", "-h", "/data"]),
+    ("메모리", ["free", "-h"]),
+    ("네트워크", ["ip", "-brief", "address"]),
+    ("Git 상태", ["git", "status", "--short", "--branch"]),
+  ]
+  for title, command in commands:
+    _, output = run_command(command, timeout=5, cwd=REPO_DIR if command[0] == "git" else None)
+    blocks.append(f"[{title}]\n{output}")
+
+  temperatures = []
+  for temp_path in sorted(Path("/sys/class/thermal").glob("thermal_zone*/temp")):
+    try:
+      value = float(temp_path.read_text().strip()) / 1000.0
+      temperatures.append(f"{temp_path.parent.name}: {value:.1f} °C")
+    except Exception:
+      pass
+  blocks.append("[온도]\n" + ("\n".join(temperatures) if temperatures else "확인 불가"))
+  return "\n\n".join(blocks)
+
+
+def diagnostic_page(message: str = "") -> str:
+  status = car_status()
+  tmux = tmux_output()
+  processes = process_output()
+  system = system_output()
+  message_html = f'<div class="message">{html.escape(message)}</div>' if message else ""
+  return f"""<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NexoPilot 진단</title><style>
+body{{margin:0;background:#0b0d12;color:#f4f7ff;font-family:Arial,sans-serif}}main{{max-width:1000px;margin:auto;padding:24px}}
+a{{color:#9bb5ff;text-decoration:none}}
+.card{{background:#151a23;border:1px solid #273044;border-radius:16px;padding:18px;margin:12px 0}}pre{{white-space:pre-wrap;word-break:break-word;background:#080b10;border-radius:10px;padding:14px;max-height:480px;overflow:auto}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.item{{background:#10151e;padding:12px;border-radius:10px}}.label{{color:#9aa7bd;font-size:13px}}.value{{font-weight:700;margin-top:5px;word-break:break-all}}
+button{{width:100%;padding:14px;border:0;border-radius:12px;background:#3159d9;color:white;font-size:16px;font-weight:700;margin-top:10px}}button.secondary{{background:#394354}}button.danger{{background:#a83a3a}}.warning{{color:#ffcf70;font-size:14px;line-height:1.55}}.message{{background:#173b2a;border:1px solid #2d7750;padding:14px;border-radius:12px;margin-bottom:12px}}
+</style></head><body><main>
+<p><a href="/">← 설정 화면으로 돌아가기</a></p><h1>진단 도구</h1>{message_html}
+<div class="card"><h2>차량 상태</h2><div class="grid">
+<div class="item"><div class="label">차량</div><div class="value">{html.escape(status['car'])}</div></div>
+<div class="item"><div class="label">지문 출처</div><div class="value">{html.escape(status['fingerprint_source'])}</div></div>
+<div class="item"><div class="label">롱컨</div><div class="value">{html.escape(status['longitudinal'])}</div></div>
+<div class="item"><div class="label">레이더</div><div class="value">{html.escape(status['radar'])}</div></div>
+<div class="item"><div class="label">대시캠 전용</div><div class="value">{html.escape(status['dashcam'])}</div></div>
+<div class="item"><div class="label">패시브</div><div class="value">{html.escape(status['passive'])}</div></div>
+</div></div>
+<div class="card"><h2>tmux a 화면</h2><p class="warning">브라우저에서는 직접 키를 입력할 수 없고 현재 tmux 화면의 최근 300줄을 보여줍니다.</p><pre>{html.escape(tmux)}</pre></div>
+<div class="card"><h2>프로세스 검사</h2><pre>{html.escape(processes)}</pre></div>
+<div class="card"><h2>시스템 검사</h2><pre>{html.escape(system)}</pre></div>
+<div class="card"><button class="secondary" onclick="location.reload()">전체 진단 새로고침</button>
+<form method="post" action="/clear-cache" onsubmit="return confirm('차량 인식 캐시를 지우고 재부팅할까요?')"><button class="danger" type="submit">차량 인식 캐시 초기화 후 재부팅</button></form>
+<form method="post" action="/reboot" onsubmit="return confirm('콤마4를 재부팅할까요?')"><button class="danger" type="submit">콤마4 재부팅</button></form>
+<p class="warning">캐시 초기화와 재부팅은 차량이 정차된 상태에서만 실행됩니다.</p></div>
+</main></body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/2.0"
+  server_version = "NexoPilotWeb/3.0"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -159,19 +248,24 @@ class Handler(BaseHTTPRequestHandler):
     self.end_headers()
     self.wfile.write(data)
 
-  def _redirect(self, message: str) -> None:
+  def _redirect(self, message: str, path: str = "/") -> None:
     self.send_response(HTTPStatus.SEE_OTHER)
-    self.send_header("Location", f"/?msg={quote(message)}")
+    self.send_header("Location", f"{path}?msg={quote(message)}")
     self.end_headers()
 
   def do_GET(self) -> None:
     parsed = urlparse(self.path)
+    query = parse_qs(parsed.query)
+    message = query.get("msg", [""])[0]
+
+    if parsed.path == "/diagnostics":
+      self._send(diagnostic_page(message))
+      return
+
     if parsed.path not in ("/", "/index.html"):
       self._send("찾을 수 없습니다", HTTPStatus.NOT_FOUND)
       return
 
-    query = parse_qs(parsed.query)
-    message = query.get("msg", [""])[0]
     check_update = query.get("check", ["0"])[0] == "1"
     status = car_status()
     forced = force_nexo_enabled()
@@ -194,7 +288,7 @@ body{{margin:0;background:#0b0d12;color:#f4f7ff;font-family:Arial,sans-serif}}ma
 h1{{font-size:30px;margin:0 0 8px}}.sub{{color:#9aa7bd;margin-bottom:22px}}.card{{background:#151a23;border:1px solid #273044;border-radius:16px;padding:18px;margin:12px 0}}
 .row{{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid #252d3d}}.row:last-child{{border:0}}.key{{color:#aeb9cc}}.value{{text-align:right;font-weight:700;word-break:break-all}}
 button{{width:100%;padding:15px;border:0;border-radius:12px;background:#3159d9;color:white;font-size:17px;font-weight:700;margin-top:10px}}button.secondary{{background:#394354}}button.danger{{background:#a83a3a}}
-select{{width:100%;padding:14px;border-radius:12px;background:#0f131b;color:white;border:1px solid #364158;font-size:17px}}.warning{{color:#ffcf70;font-size:14px;line-height:1.55}}.error{{color:#ff8585}}.message{{background:#173b2a;border:1px solid #2d7750;padding:14px;border-radius:12px;margin-bottom:12px;white-space:pre-wrap}}a{{color:#87a8ff}}
+select{{width:100%;padding:14px;border-radius:12px;background:#0f131b;color:white;border:1px solid #364158;font-size:17px}}.warning{{color:#ffcf70;font-size:14px;line-height:1.55}}.error{{color:#ff8585}}.message{{background:#173b2a;border:1px solid #2d7750;padding:14px;border-radius:12px;margin-bottom:12px;white-space:pre-wrap}}a{{color:#87a8ff;text-decoration:none}}
 </style></head><body><main>
 <h1>NexoPilot</h1><div class="sub">콤마4 로컬 설정 · http://{html.escape(ip)}:{PORT}</div>
 {message_html}
@@ -220,6 +314,8 @@ select{{width:100%;padding:14px;border-radius:12px;background:#0f131b;color:whit
 <form method="post" action="/update" onsubmit="return confirm('업데이트 후 콤마4를 재부팅합니다. 계속할까요?')"><button type="submit">업데이트 설치 후 재부팅</button></form>
 <p class="warning">차량이 정차된 상태에서만 사용하세요. 로컬 변경 파일이 있으면 안전을 위해 업데이트하지 않습니다.</p></div>
 
+<div class="card"><h2>검진 도구</h2><a href="/diagnostics"><button type="button">tmux 화면 및 전체 진단 열기</button></a>
+<p class="warning">tmux 최근 로그와 프로세스 상태 및 디스크·메모리·온도·네트워크·Git 상태를 확인합니다.</p></div>
 <div class="card"><div class="row"><div class="key">브랜치</div><div class="value">{html.escape(branch)}</div></div><div class="row"><div class="key">커밋</div><div class="value">{html.escape(commit)}</div></div></div>
 <div class="card"><button class="secondary" onclick="location.reload()">상태 새로고침</button></div>
 </main></body></html>"""
@@ -248,6 +344,23 @@ select{{width:100%;padding:14px;border-radius:12px;background:#0f131b;color:whit
         self._redirect(result)
         return
       self._send(f"<html><body style='background:#0b0d12;color:white;font-family:Arial;padding:30px'><h2>업데이트 완료</h2><pre>{html.escape(result)}</pre><p>콤마4가 재부팅됩니다.</p></body></html>")
+      schedule_reboot()
+      return
+
+    if self.path == "/clear-cache":
+      if is_onroad():
+        self._redirect("주행 중에는 차량 인식 캐시를 지울 수 없습니다.", "/diagnostics")
+        return
+      clear_car_cache()
+      self._send("<html><body style='background:#0b0d12;color:white;font-family:Arial;padding:30px'><h2>차량 인식 캐시를 초기화했습니다.</h2><p>콤마4가 재부팅됩니다.</p></body></html>")
+      schedule_reboot()
+      return
+
+    if self.path == "/reboot":
+      if is_onroad():
+        self._redirect("주행 중에는 재부팅할 수 없습니다.", "/diagnostics")
+        return
+      self._send("<html><body style='background:#0b0d12;color:white;font-family:Arial;padding:30px'><h2>콤마4를 재부팅합니다.</h2></body></html>")
       schedule_reboot()
       return
 
