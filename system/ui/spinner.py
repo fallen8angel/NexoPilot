@@ -35,7 +35,7 @@ def clamp(value, min_value, max_value):
 class Spinner(Widget):
   def __init__(self):
     super().__init__()
-    self._comma_texture = gui_app.texture("images/spinner_comma.png", TEXTURE_SIZE, TEXTURE_SIZE)
+    self._comma_texture = gui_app.texture("images/spinner_comma.png", gui_app.width, gui_app.height)
     self._spinner_texture = gui_app.texture("images/spinner_track.png", TEXTURE_SIZE, TEXTURE_SIZE, alpha_premultiply=True)
     self._rotation = 0.0
     self._progress: int | None = None
@@ -72,7 +72,7 @@ class Spinner(Widget):
     rl.draw_texture_pro(self._spinner_texture, rl.Rectangle(0, 0, TEXTURE_SIZE, TEXTURE_SIZE),
                         rl.Rectangle(center.x, center.y, TEXTURE_SIZE, TEXTURE_SIZE),
                         spinner_origin, self._rotation, rl.WHITE)
-    rl.draw_texture_v(self._comma_texture, comma_position, rl.WHITE)
+    rl.draw_texture_v(self._comma_texture, rl.Vector2(0, 0), rl.WHITE)
 
     # Display the progress bar or text based on user input
     if self._progress is not None:
