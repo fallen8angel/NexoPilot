@@ -117,6 +117,22 @@ def is_onroad() -> bool:
   return params.get_bool("IsOnroad") and not params.get_bool("IsOffroad")
 
 
+def parked_for_update() -> tuple[bool, str]:
+  if not is_onroad():
+    return True, "오프로드"
+  try:
+    sock = messaging.sub_sock("carState", conflate=True, timeout=1200)
+    message = messaging.recv_one(sock)
+    if message is None:
+      return False, "기어 상태 확인 불가"
+    gear = message.carState.gearShifter
+    if gear == car.CarState.GearShifter.park:
+      return True, "P"
+    return False, str(gear)
+  except Exception as error:
+    return False, f"기어 상태 확인 실패: {error}"
+
+
 def schedule_reboot(delay: float = 1.5) -> None:
   def reboot() -> None:
     time.sleep(delay)
@@ -139,18 +155,27 @@ def update_status(fetch: bool = False) -> dict[str, str | bool]:
 
 
 def perform_update() -> tuple[bool, str]:
-  if is_onroad():
-    return False, "주행 중에는 업데이트할 수 없습니다."
+  parked, gear = parked_for_update()
+  if not parked:
+    return False, f"업데이트는 차량이 P단일 때만 가능합니다. 현재 상태: {gear}"
+
+  stash_message = ""
   dirty = git_run("status", "--porcelain")
-  if dirty.returncode != 0 or dirty.stdout.strip():
-    return False, "로컬 변경 파일이 있어 업데이트를 중단했습니다."
+  if dirty.returncode != 0:
+    return False, dirty.stderr.strip() or "Git 상태 확인 실패"
+  if dirty.stdout.strip():
+    stashed = git_run("stash", "push", "--include-untracked", "-m", "NexoPilot web auto-stash before update", timeout=60)
+    if stashed.returncode != 0:
+      return False, stashed.stderr.strip() or stashed.stdout.strip() or "로컬 변경 보관 실패"
+    stash_message = "\n로컬 변경 파일은 Git stash에 안전하게 보관했습니다."
+
   fetched = git_run("fetch", "origin", BRANCH, timeout=60)
   if fetched.returncode != 0:
     return False, fetched.stderr.strip() or "git fetch 실패"
   merged = git_run("merge", "--ff-only", f"origin/{BRANCH}", timeout=60)
   if merged.returncode != 0:
     return False, merged.stderr.strip() or merged.stdout.strip() or "업데이트 적용 실패"
-  return True, merged.stdout.strip() or "최신 버전입니다."
+  return True, (merged.stdout.strip() or "최신 버전입니다.") + stash_message
 
 
 def tmux_output() -> str:
@@ -192,7 +217,6 @@ def base_css() -> str:
 body{margin:0;background:#05070b;color:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif}main{max-width:820px;margin:auto;padding:22px}
 a{color:#8eafff;text-decoration:none}.card{background:#151821;border:1px solid #2a3140;border-radius:22px;padding:18px;margin:14px 0}.row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:15px 2px;border-bottom:1px solid #292f3b}.row:last-child{border:0}.title{font-size:17px;font-weight:700}.desc{font-size:13px;color:#9ca5b5;margin-top:4px;line-height:1.4}.value{font-weight:700;text-align:right;word-break:break-all}button{width:100%;padding:15px;border:0;border-radius:14px;background:#3159d9;color:white;font-size:17px;font-weight:700;margin-top:10px}button.secondary{background:#41495b}button.danger{background:#ad4242}.message{background:#173b2a;border:1px solid #2d7750;padding:14px;border-radius:14px;margin:10px 0}.warning{color:#ffcf70;font-size:14px;line-height:1.55}select,input[type=number]{width:100%;box-sizing:border-box;padding:14px;border-radius:14px;background:#0e1118;color:white;border:1px solid #394154;font-size:17px}.switch{position:relative;display:inline-block;width:52px;height:31px;flex:0 0 auto}.switch input{opacity:0;width:0;height:0}.slider{position:absolute;inset:0;background:#4b4f58;border-radius:31px;transition:.2s}.slider:before{content:'';position:absolute;width:27px;height:27px;left:2px;top:2px;background:white;border-radius:50%;transition:.2s;box-shadow:0 1px 4px #0008}.switch input:checked+.slider{background:#34c759}.switch input:checked+.slider:before{transform:translateX(21px)}pre{white-space:pre-wrap;word-break:break-word;background:#080b10;border-radius:12px;padding:14px;max-height:480px;overflow:auto}.number-grid{display:grid;grid-template-columns:1fr;gap:12px}.number-item{background:#0d1118;border-radius:16px;padding:14px}
 """
-
 
 
 def live_page() -> str:
@@ -263,7 +287,7 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/5.2"
+  server_version = "NexoPilotWeb/5.3"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -308,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
     page = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot</title><style>{base_css()}</style></head><body><main><h1>NexoPilot</h1><div class="desc">콤마4 로컬 설정 · http://{html.escape(local_ip())}:{PORT}</div>{msg}
 <div class="card"><div class="row"><span>현재 차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div></div>
 <div class="card"><a href="/live"><button>실시간 전방 화면 열기</button></a><a href="/settings"><button class="secondary">차량 설정 열기</button></a><a href="/diagnostics"><button class="secondary">진단 도구 열기</button></a></div>
-<div class="card"><h2>웹 업데이트</h2><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><form method="get"><input type="hidden" name="check" value="1"><button class="secondary">업데이트 확인</button></form><form method="post" action="/update"><button>업데이트 설치 후 재부팅</button></form></div>
+<div class="card"><h2>웹 업데이트</h2><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><p class="warning">차량 전원이 켜져 있을 때는 반드시 P단에서만 업데이트됩니다.</p><form method="get"><input type="hidden" name="check" value="1"><button class="secondary">업데이트 확인</button></form><form method="post" action="/update"><button>업데이트 설치 후 재부팅</button></form></div>
 <div class="card"><div class="row"><span>브랜치</span><span class="value">{html.escape(git_value('branch','--show-current'))}</span></div><div class="row"><span>커밋</span><span class="value">{html.escape(git_value('log','-1','--oneline'))}</span></div></div></main></body></html>'''
     self._send(page)
 
