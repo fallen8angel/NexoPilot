@@ -19,6 +19,27 @@ STATE_DIR = Path("/data/nexopilot")
 FORCE_NEXO_FILE = STATE_DIR / "force_nexo"
 BRANCH = "NEXO"
 
+TOGGLES = [
+  ("AlphaLongitudinalEnabled", "오픈파일럿 롱컨", "가속과 감속을 오픈파일럿이 제어합니다.", True),
+  ("OpenpilotEnabledToggle", "오픈파일럿 사용", "차량 제어 기능 전체를 켜거나 끕니다.", True),
+  ("ExperimentalMode", "실험 모드", "실험용 종방향 주행 기능을 사용합니다.", False),
+  ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 미터 단위로 표시합니다.", False),
+  ("EnableRadarTracks", "레이더 트랙 활성화", "넥쏘 만도 레이더의 다중 트랙 사용 설정을 저장합니다.", True),
+  ("AutoLaneChangeEnabled", "자동 차선 변경", "방향지시등 입력 후 자동 차선 변경을 허용합니다.", False),
+  ("AutoEngage", "자동 인게이지", "조건이 만족되면 자동으로 주행 제어를 시작하도록 설정합니다.", False),
+  ("AutoResumeFromStop", "정지 후 자동 출발", "앞차가 출발하면 정지 상태에서 자동 재출발하도록 설정합니다.", False),
+  ("SccBus2", "SCC BUS2 연결", "SCC 배선을 BUS2로 개조한 차량에서만 사용합니다.", True),
+]
+
+NUMERIC_SETTINGS = [
+  ("FollowingDistance", "차간거리 단계", "1~4", 1.0, 4.0, 1.0, "2"),
+  ("SteerSensitivity", "조향 감도", "50~150%", 50.0, 150.0, 1.0, "100"),
+  ("LongitudinalKp", "롱컨 비례값 Kp", "0.10~3.00", 0.10, 3.00, 0.01, "1.00"),
+  ("LongitudinalKi", "롱컨 적분값 Ki", "0.00~1.00", 0.00, 1.00, 0.01, "0.10"),
+  ("StartAccel", "출발 가속값", "0.10~2.00 m/s²", 0.10, 2.00, 0.05, "1.00"),
+  ("StopDistance", "정지거리", "2.0~10.0 m", 2.0, 10.0, 0.1, "5.9"),
+]
+
 
 def local_ip() -> str:
   sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -170,28 +191,29 @@ def system_output() -> str:
 def base_css() -> str:
   return """
 body{margin:0;background:#05070b;color:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif}main{max-width:820px;margin:auto;padding:22px}
-a{color:#8eafff;text-decoration:none}.card{background:#151821;border:1px solid #2a3140;border-radius:22px;padding:18px;margin:14px 0}.row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:15px 2px;border-bottom:1px solid #292f3b}.row:last-child{border:0}.title{font-size:17px;font-weight:700}.desc{font-size:13px;color:#9ca5b5;margin-top:4px;line-height:1.4}.value{font-weight:700;text-align:right;word-break:break-all}button{width:100%;padding:15px;border:0;border-radius:14px;background:#3159d9;color:white;font-size:17px;font-weight:700;margin-top:10px}button.secondary{background:#41495b}button.danger{background:#ad4242}.message{background:#173b2a;border:1px solid #2d7750;padding:14px;border-radius:14px;margin:10px 0}.warning{color:#ffcf70;font-size:14px;line-height:1.55}select{width:100%;padding:14px;border-radius:14px;background:#0e1118;color:white;border:1px solid #394154;font-size:17px}.switch{position:relative;display:inline-block;width:52px;height:31px;flex:0 0 auto}.switch input{opacity:0;width:0;height:0}.slider{position:absolute;inset:0;background:#4b4f58;border-radius:31px;transition:.2s}.slider:before{content:'';position:absolute;width:27px;height:27px;left:2px;top:2px;background:white;border-radius:50%;transition:.2s;box-shadow:0 1px 4px #0008}.switch input:checked+.slider{background:#34c759}.switch input:checked+.slider:before{transform:translateX(21px)}pre{white-space:pre-wrap;word-break:break-word;background:#080b10;border-radius:12px;padding:14px;max-height:480px;overflow:auto}
+a{color:#8eafff;text-decoration:none}.card{background:#151821;border:1px solid #2a3140;border-radius:22px;padding:18px;margin:14px 0}.row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:15px 2px;border-bottom:1px solid #292f3b}.row:last-child{border:0}.title{font-size:17px;font-weight:700}.desc{font-size:13px;color:#9ca5b5;margin-top:4px;line-height:1.4}.value{font-weight:700;text-align:right;word-break:break-all}button{width:100%;padding:15px;border:0;border-radius:14px;background:#3159d9;color:white;font-size:17px;font-weight:700;margin-top:10px}button.secondary{background:#41495b}button.danger{background:#ad4242}.message{background:#173b2a;border:1px solid #2d7750;padding:14px;border-radius:14px;margin:10px 0}.warning{color:#ffcf70;font-size:14px;line-height:1.55}select,input[type=number]{width:100%;box-sizing:border-box;padding:14px;border-radius:14px;background:#0e1118;color:white;border:1px solid #394154;font-size:17px}.switch{position:relative;display:inline-block;width:52px;height:31px;flex:0 0 auto}.switch input{opacity:0;width:0;height:0}.slider{position:absolute;inset:0;background:#4b4f58;border-radius:31px;transition:.2s}.slider:before{content:'';position:absolute;width:27px;height:27px;left:2px;top:2px;background:white;border-radius:50%;transition:.2s;box-shadow:0 1px 4px #0008}.switch input:checked+.slider{background:#34c759}.switch input:checked+.slider:before{transform:translateX(21px)}pre{white-space:pre-wrap;word-break:break-word;background:#080b10;border-radius:12px;padding:14px;max-height:480px;overflow:auto}.number-grid{display:grid;grid-template-columns:1fr;gap:12px}.number-item{background:#0d1118;border-radius:16px;padding:14px}
 """
 
 
 def settings_page(message: str = "") -> str:
   params = Params()
   forced = force_nexo_enabled()
-  toggles = [
-    ("AlphaLongitudinalEnabled", "오픈파일럿 롱컨", "가속과 감속을 오픈파일럿이 제어합니다. 재부팅 후 적용됩니다.", True),
-    ("OpenpilotEnabledToggle", "오픈파일럿 사용", "차량 제어 기능 전체를 켜거나 끕니다.", True),
-    ("ExperimentalMode", "실험 모드", "실험용 종방향 주행 기능을 사용합니다.", False),
-    ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 미터 단위로 표시합니다.", False),
-  ]
   rows = []
-  for key, title, desc, reboot in toggles:
+  for key, title, desc, reboot in TOGGLES:
     checked = " checked" if params.get_bool(key) else ""
     rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><input type="hidden" name="reboot" value="{'1' if reboot else '0'}"><div class="row"><div><div class="title">{title}</div><div class="desc">{desc}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
+
+  number_rows = []
+  for key, title, hint, minimum, maximum, step, default in NUMERIC_SETTINGS:
+    raw = params.get(key, encoding="utf-8") or default
+    number_rows.append(f'''<div class="number-item"><div class="title">{title}</div><div class="desc">범위 {hint}</div><form method="post" action="/value"><input type="hidden" name="key" value="{key}"><input type="number" name="value" value="{html.escape(raw)}" min="{minimum}" max="{maximum}" step="{step}"><button class="secondary" type="submit">저장</button></form></div>''')
+
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 차량 설정</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>차량 설정</h1>{msg}
 <div class="card"><div class="title">차량 선택</div><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button type="submit">차량 저장 후 재부팅</button></form><p class="warning">넥쏘 강제 선택은 정상 하네스와 넥쏘 차량에서만 사용하세요.</p></div>
-<div class="card"><h2>주행 설정</h2>{''.join(rows)}</div>
-<div class="card"><p class="warning">롱컨과 오픈파일럿 사용 설정은 안전을 위해 정차 상태에서만 바꿀 수 있으며 변경 후 자동 재부팅됩니다.</p></div>
+<div class="card"><h2>주행 기능</h2>{''.join(rows)}</div>
+<div class="card"><h2>고급 수치 설정</h2><div class="number-grid">{''.join(number_rows)}</div><p class="warning">수치 설정은 NexoPilot 전용 Params에 저장됩니다. 실제 제어 코드가 해당 값을 읽는 항목만 주행에 반영됩니다.</p></div>
+<div class="card"><p class="warning">롱컨·레이더·SCC BUS2 설정은 정차 상태에서만 변경하고 변경 후 재부팅하세요. SCC BUS2는 배선 개조 차량이 아니면 끄세요.</p></div>
 </main></body></html>'''
 
 
@@ -205,7 +227,7 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/4.0"
+  server_version = "NexoPilotWeb/5.0"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -251,6 +273,7 @@ class Handler(BaseHTTPRequestHandler):
   def do_POST(self) -> None:
     length = int(self.headers.get("Content-Length", "0"))
     values = parse_qs(self.rfile.read(length).decode("utf-8"))
+
     if self.path == "/vehicle":
       if is_onroad():
         self._redirect("주행 중에는 차량 설정을 바꿀 수 없습니다.", "/settings")
@@ -263,12 +286,13 @@ class Handler(BaseHTTPRequestHandler):
       self._send("<h2>차량 설정 저장 완료. 재부팅합니다.</h2>")
       schedule_reboot()
       return
+
     if self.path == "/toggle":
       if is_onroad():
         self._redirect("주행 중에는 설정을 바꿀 수 없습니다.", "/settings")
         return
       key = values.get("key", [""])[0]
-      allowed = {"AlphaLongitudinalEnabled", "OpenpilotEnabledToggle", "ExperimentalMode", "IsMetric"}
+      allowed = {item[0] for item in TOGGLES}
       if key not in allowed:
         self._send("허용되지 않은 설정", HTTPStatus.BAD_REQUEST)
         return
@@ -282,6 +306,30 @@ class Handler(BaseHTTPRequestHandler):
       else:
         self._redirect("설정을 저장했습니다.", "/settings")
       return
+
+    if self.path == "/value":
+      if is_onroad():
+        self._redirect("주행 중에는 수치 설정을 바꿀 수 없습니다.", "/settings")
+        return
+      key = values.get("key", [""])[0]
+      raw_value = values.get("value", [""])[0].strip()
+      spec = next((item for item in NUMERIC_SETTINGS if item[0] == key), None)
+      if spec is None:
+        self._send("허용되지 않은 수치 설정", HTTPStatus.BAD_REQUEST)
+        return
+      try:
+        number = float(raw_value)
+      except ValueError:
+        self._redirect("숫자를 정확히 입력하세요.", "/settings")
+        return
+      minimum, maximum = spec[3], spec[4]
+      if not minimum <= number <= maximum:
+        self._redirect(f"허용 범위는 {minimum}~{maximum}입니다.", "/settings")
+        return
+      Params().put(key, raw_value)
+      self._redirect(f"{spec[1]} 값을 저장했습니다.", "/settings")
+      return
+
     if self.path == "/update":
       ok, result = perform_update()
       if not ok:
@@ -290,6 +338,7 @@ class Handler(BaseHTTPRequestHandler):
       self._send(f"<h2>업데이트 완료</h2><pre>{html.escape(result)}</pre>")
       schedule_reboot()
       return
+
     if self.path == "/clear-cache":
       if is_onroad():
         self._redirect("주행 중에는 캐시를 지울 수 없습니다.", "/diagnostics")
@@ -298,6 +347,7 @@ class Handler(BaseHTTPRequestHandler):
       self._send("<h2>캐시를 초기화했습니다. 재부팅합니다.</h2>")
       schedule_reboot()
       return
+
     if self.path == "/reboot":
       if is_onroad():
         self._redirect("주행 중에는 재부팅할 수 없습니다.", "/diagnostics")
@@ -305,6 +355,7 @@ class Handler(BaseHTTPRequestHandler):
       self._send("<h2>콤마4를 재부팅합니다.</h2>")
       schedule_reboot()
       return
+
     self._send("찾을 수 없습니다", HTTPStatus.NOT_FOUND)
 
 
