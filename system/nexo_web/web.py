@@ -32,7 +32,6 @@ TOGGLES = [
 ]
 
 NUMERIC_SETTINGS = [
-  ("FollowingDistance", "차간거리 단계", "1~4", 1.0, 4.0, 1.0, "2"),
   ("SteerSensitivity", "조향 감도", "50~150%", 50.0, 150.0, 1.0, "100"),
   ("LongitudinalKp", "롱컨 비례값 Kp", "0.10~3.00", 0.10, 3.00, 0.01, "1.00"),
   ("LongitudinalKi", "롱컨 적분값 Ki", "0.00~1.00", 0.00, 1.00, 0.01, "0.10"),
@@ -227,7 +226,7 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/5.0"
+  server_version = "NexoPilotWeb/5.1"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
