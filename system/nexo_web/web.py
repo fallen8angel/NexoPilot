@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from cereal import car
+from cereal import car, messaging
 from openpilot.common.params import Params
 
 HOST = "0.0.0.0"
@@ -194,6 +194,43 @@ a{color:#8eafff;text-decoration:none}.card{background:#151821;border:1px solid #
 """
 
 
+
+def live_page() -> str:
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 실시간 화면</title><style>{base_css()}
+.camera{{width:100%;display:block;background:#000;border-radius:18px;aspect-ratio:16/10;object-fit:contain}}.live{{display:inline-flex;align-items:center;gap:7px;color:#71e28f;font-weight:700}}.dot{{width:9px;height:9px;background:#34c759;border-radius:50%;box-shadow:0 0 9px #34c759}}
+</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>실시간 전방 화면</h1>
+<div class="card"><div class="live"><span class="dot"></span>콤마4 카메라 연결</div><p class="desc">카메라 프레임이 준비되면 자동으로 표시됩니다.</p><img class="camera" src="/stream.mjpeg" alt="전방 카메라 실시간 화면"></div>
+<div class="card"><p class="warning">같은 내부 네트워크에서만 사용하세요. 화면은 상태 확인용이며 실제 도로 상황은 반드시 운전자가 직접 확인해야 합니다.</p><button class="secondary" onclick="location.reload()">영상 다시 연결</button></div>
+</main></body></html>'''
+
+
+def stream_camera(handler: BaseHTTPRequestHandler) -> None:
+  handler.send_response(HTTPStatus.OK)
+  handler.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+  handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+  handler.send_header("Pragma", "no-cache")
+  handler.send_header("Connection", "close")
+  handler.end_headers()
+
+  sock = messaging.sub_sock("thumbnail", conflate=True)
+  try:
+    while True:
+      message = messaging.recv_one(sock)
+      if message is None:
+        continue
+      frame = bytes(message.thumbnail.thumbnail)
+      if not frame:
+        continue
+      handler.wfile.write(b"--frame\r\n")
+      handler.wfile.write(b"Content-Type: image/jpeg\r\n")
+      handler.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
+      handler.wfile.write(frame)
+      handler.wfile.write(b"\r\n")
+      handler.wfile.flush()
+  except (BrokenPipeError, ConnectionResetError):
+    pass
+
+
 def settings_page(message: str = "") -> str:
   params = Params()
   forced = force_nexo_enabled()
@@ -226,7 +263,7 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/5.1"
+  server_version = "NexoPilotWeb/5.2"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -249,6 +286,12 @@ class Handler(BaseHTTPRequestHandler):
     parsed = urlparse(self.path)
     query = parse_qs(parsed.query)
     message = query.get("msg", [""])[0]
+    if parsed.path == "/live":
+      self._send(live_page())
+      return
+    if parsed.path == "/stream.mjpeg":
+      stream_camera(self)
+      return
     if parsed.path == "/settings":
       self._send(settings_page(message))
       return
@@ -264,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
     msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
     page = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot</title><style>{base_css()}</style></head><body><main><h1>NexoPilot</h1><div class="desc">콤마4 로컬 설정 · http://{html.escape(local_ip())}:{PORT}</div>{msg}
 <div class="card"><div class="row"><span>현재 차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div></div>
-<div class="card"><a href="/settings"><button>차량 설정 열기</button></a><a href="/diagnostics"><button class="secondary">진단 도구 열기</button></a></div>
+<div class="card"><a href="/live"><button>실시간 전방 화면 열기</button></a><a href="/settings"><button class="secondary">차량 설정 열기</button></a><a href="/diagnostics"><button class="secondary">진단 도구 열기</button></a></div>
 <div class="card"><h2>웹 업데이트</h2><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><form method="get"><input type="hidden" name="check" value="1"><button class="secondary">업데이트 확인</button></form><form method="post" action="/update"><button>업데이트 설치 후 재부팅</button></form></div>
 <div class="card"><div class="row"><span>브랜치</span><span class="value">{html.escape(git_value('branch','--show-current'))}</span></div><div class="row"><span>커밋</span><span class="value">{html.escape(git_value('log','-1','--oneline'))}</span></div></div></main></body></html>'''
     self._send(page)
