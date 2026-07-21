@@ -21,23 +21,21 @@ BRANCH = "NEXO"
 
 TOGGLES = [
   ("AlphaLongitudinalEnabled", "오픈파일럿 롱컨", "가속과 감속을 오픈파일럿이 제어합니다.", True),
-  ("OpenpilotEnabledToggle", "오픈파일럿 사용", "차량 제어 기능 전체를 켜거나 끕니다.", True),
+  ("OpenpilotEnabledToggle", "오픈파일럿 사용", "오픈파일럿 기능 전체를 켜거나 끕니다.", True),
   ("ExperimentalMode", "실험 모드", "실험용 종방향 주행 기능을 사용합니다.", False),
-  ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 미터 단위로 표시합니다.", False),
-  ("EnableRadarTracks", "레이더 트랙 활성화", "넥쏘 만도 레이더의 다중 트랙 사용 설정을 저장합니다.", True),
-  ("AutoLaneChangeEnabled", "자동 차선 변경", "방향지시등 입력 후 자동 차선 변경을 허용합니다.", False),
-  ("LaneDepartureWarningEnabled", "차선이탈 경고", "방향지시등 없이 차선을 벗어날 때 경고를 표시합니다.", False),
-  ("AutoEngage", "자동 인게이지", "조건이 만족되면 자동으로 주행 제어를 시작하도록 설정합니다.", False),
-  ("AutoResumeFromStop", "정지 후 자동 출발", "앞차가 출발하면 정지 상태에서 자동 재출발하도록 설정합니다.", False),
-  ("SccBus2", "SCC BUS2 연결", "SCC 배선을 BUS2로 개조한 차량에서만 사용합니다.", True),
+  ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 m 단위로 표시합니다.", False),
+  ("EnableRadarTracks", "레이더 트랙 활성화", "넥쏘 만도 레이더의 다중 트랙 정보를 사용합니다.", True),
+  ("AutoLaneChangeEnabled", "자동 차선 변경", "방향지시등 사용 시 자동 차선 변경을 허용합니다.", False),
+  ("LaneDepartureWarningEnabled", "차선이탈 경고", "방향지시등 없이 차선을 벗어나면 경고를 표시합니다.", False),
+  ("AutoResumeFromStop", "정지 후 자동 출발", "앞차가 출발하면 정지 상태에서 자동으로 다시 출발합니다.", False),
 ]
 
 NUMERIC_SETTINGS = [
-  ("SteerSensitivity", "조향 감도", "50~150%", 50.0, 150.0, 1.0, "100"),
-  ("LongitudinalKp", "롱컨 비례값 Kp", "0.10~3.00", 0.10, 3.00, 0.01, "1.00"),
-  ("LongitudinalKi", "롱컨 적분값 Ki", "0.00~1.00", 0.00, 1.00, 0.01, "0.10"),
-  ("StartAccel", "출발 가속값", "0.10~2.00 m/s²", 0.10, 2.00, 0.05, "1.00"),
-  ("StopDistance", "정지거리", "2.0~10.0 m", 2.0, 10.0, 0.1, "5.9"),
+  ("SteerSensitivity", "조향 감도", "핸들 반응 속도를 조절합니다. 높을수록 빠르게 반응합니다.", "50~150%", 50.0, 150.0, 1.0, "100"),
+  ("LongitudinalKp", "롱컨 비례값 Kp", "앞차 속도 변화에 반응하는 정도를 조절합니다.", "0.10~3.00", 0.10, 3.00, 0.01, "1.00"),
+  ("LongitudinalKi", "롱컨 적분값 Ki", "지속되는 속도 오차를 누적해서 보정합니다.", "0.00~1.00", 0.00, 1.00, 0.01, "0.10"),
+  ("StartAccel", "출발 가속값", "정지 후 출발할 때의 초기 가속 강도를 조절합니다.", "0.10~2.00 m/s²", 0.10, 2.00, 0.05, "1.00"),
+  ("StopDistance", "정지거리", "앞차 뒤에서 멈출 때의 목표 정차 거리를 조절합니다.", "2.0~10.0 m", 2.0, 10.0, 0.1, "5.9"),
 ]
 
 
@@ -257,15 +255,15 @@ def settings_page(message: str = "") -> str:
     checked = " checked" if params.get_bool(key) else ""
     rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><input type="hidden" name="reboot" value="{'1' if reboot else '0'}"><div class="row"><div><div class="title">{title}</div><div class="desc">{desc}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
   number_rows = []
-  for key, title, hint, minimum, maximum, step, default in NUMERIC_SETTINGS:
+  for key, title, desc, hint, minimum, maximum, step, default in NUMERIC_SETTINGS:
     raw = params.get(key, encoding="utf-8") or default
-    number_rows.append(f'''<div class="number-item"><div class="title">{title}</div><div class="desc">범위 {hint}</div><form method="post" action="/value"><input type="hidden" name="key" value="{key}"><input type="number" name="value" value="{html.escape(raw)}" min="{minimum}" max="{maximum}" step="{step}"><button class="secondary" type="submit">저장</button></form></div>''')
+    number_rows.append(f'''<div class="number-item"><div class="title">{title}</div><div class="desc">{desc}</div><div class="desc">범위 {hint} · 권장값 {default}</div><form method="post" action="/value"><input type="hidden" name="key" value="{key}"><input type="number" name="value" value="{html.escape(raw)}" min="{minimum}" max="{maximum}" step="{step}"><button class="secondary" type="submit">저장</button></form></div>''')
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 차량 설정</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>차량 설정</h1>{msg}
-<div class="card"><div class="title">차량 선택</div><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button type="submit">차량 저장 후 재부팅</button></form><p class="warning">넥쏘 강제 선택은 정상 하네스와 넥쏘 차량에서만 사용하세요.</p></div>
+<div class="card"><div class="title">차량 선택</div><div class="desc">자동 인식 또는 넥쏘 1세대 강제 선택을 설정합니다.</div><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button type="submit">차량 저장 후 재부팅</button></form><p class="warning">넥쏘 강제 선택은 정상 하네스와 넥쏘 차량에서만 사용하세요.</p></div>
 <div class="card"><h2>주행 기능</h2>{''.join(rows)}</div>
-<div class="card"><h2>고급 수치 설정</h2><div class="number-grid">{''.join(number_rows)}</div><p class="warning">수치 설정은 NexoPilot 전용 Params에 저장됩니다. 실제 제어 코드가 해당 값을 읽는 항목만 주행에 반영됩니다.</p></div>
-<div class="card"><p class="warning">롱컨·레이더·SCC BUS2 설정은 정차 상태에서만 변경하고 변경 후 재부팅하세요. SCC BUS2는 배선 개조 차량이 아니면 끄세요.</p></div>
+<div class="card"><h2>고급 수치 설정</h2><div class="number-grid">{''.join(number_rows)}</div><p class="warning">값을 한 번에 크게 바꾸지 말고 조금씩 조절한 뒤 실제 주행에서 확인하세요. 실제 제어 코드가 값을 읽는 항목만 주행에 반영됩니다.</p></div>
+<div class="card"><p class="warning">롱컨과 레이더 설정은 정차 상태에서만 변경하고 변경 후 재부팅하세요.</p></div>
 </main></body></html>'''
 
 
@@ -273,13 +271,13 @@ def diagnostic_page(message: str = "") -> str:
   status = car_status()
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>진단 도구</h1>{msg}
-<div class="card"><h2>차량 상태</h2><div class="row"><span>차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>지문 출처</span><span class="value">{html.escape(status['fingerprint_source'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div></div>
-<div class="card"><h2>tmux a 화면</h2><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><pre>{html.escape(system_output())}</pre></div>
+<div class="card"><h2>차량 상태</h2><div class="desc">현재 차량과 롱컨 및 레이더 상태를 확인합니다.</div><div class="row"><span>차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>지문 출처</span><span class="value">{html.escape(status['fingerprint_source'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div></div>
+<div class="card"><h2>tmux a 화면</h2><div class="desc">실시간 시스템 로그를 확인합니다.</div><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><div class="desc">주요 프로그램의 실행 상태를 확인합니다.</div><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><div class="desc">온도 메모리 저장공간 네트워크 상태를 확인합니다.</div><pre>{html.escape(system_output())}</pre></div>
 <div class="card"><button class="secondary" onclick="location.reload()">전체 진단 새로고침</button><form method="post" action="/clear-cache"><button class="danger">차량 인식 캐시 초기화 후 재부팅</button></form><form method="post" action="/reboot"><button class="danger">콤마4 재부팅</button></form></div></main></body></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/5.4"
+  server_version = "NexoPilotWeb/5.5"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -324,7 +322,7 @@ class Handler(BaseHTTPRequestHandler):
     page = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot</title><style>{base_css()}</style></head><body><main><h1>NexoPilot</h1><div class="desc">콤마4 로컬 설정 · http://{html.escape(local_ip())}:{PORT}</div>{msg}
 <div class="card"><div class="row"><span>현재 차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div></div>
 <div class="card"><a href="/live"><button>실시간 전방 화면 열기</button></a><a href="/settings"><button class="secondary">차량 설정 열기</button></a><a href="/diagnostics"><button class="secondary">진단 도구 열기</button></a></div>
-<div class="card"><h2>웹 업데이트</h2><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><p class="warning">차량 전원이 켜져 있을 때는 반드시 P단에서만 업데이트됩니다.</p><form method="get"><input type="hidden" name="check" value="1"><button class="secondary">업데이트 확인</button></form><form method="post" action="/update"><button>업데이트 설치 후 재부팅</button></form></div>
+<div class="card"><h2>웹 업데이트</h2><div class="desc">최신 버전을 확인하고 설치한 뒤 재부팅합니다.</div><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><p class="warning">차량 전원이 켜져 있을 때는 반드시 P단에서만 업데이트됩니다.</p><form method="get"><input type="hidden" name="check" value="1"><button class="secondary">업데이트 확인</button></form><form method="post" action="/update"><button>업데이트 설치 후 재부팅</button></form></div>
 <div class="card"><div class="row"><span>브랜치</span><span class="value">{html.escape(git_value('branch','--show-current'))}</span></div><div class="row"><span>커밋</span><span class="value">{html.escape(git_value('log','-1','--oneline'))}</span></div></div></main></body></html>'''
     self._send(page)
 
@@ -377,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
       except ValueError:
         self._redirect("숫자를 정확히 입력하세요.", "/settings")
         return
-      minimum, maximum = spec[3], spec[4]
+      minimum, maximum = spec[4], spec[5]
       if not minimum <= number <= maximum:
         self._redirect(f"허용 범위는 {minimum}~{maximum}입니다.", "/settings")
         return
