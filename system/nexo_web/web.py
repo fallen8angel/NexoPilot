@@ -4,6 +4,7 @@ import socket
 import subprocess
 import threading
 import time
+import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +38,29 @@ NUMERIC_SETTINGS = [
   ("StartAccel", "출발 가속값", "정지 후 출발할 때의 초기 가속 강도를 조절합니다.", "0.10~2.00 m/s²", 0.10, 2.00, 0.05, "1.00"),
   ("StopDistance", "정지거리", "앞차 뒤에서 멈출 때의 목표 정차 거리를 조절합니다.", "2.0~10.0 m", 2.0, 10.0, 0.1, "5.9"),
 ]
+
+
+def param_text(params: Params, key: str, default: str = "") -> str:
+  """Read a Params value without relying on the removed encoding= argument."""
+  try:
+    value = params.get(key)
+  except Exception:
+    return default
+  if value is None:
+    return default
+  if isinstance(value, bytes):
+    try:
+      return value.decode("utf-8")
+    except UnicodeDecodeError:
+      return default
+  return str(value)
+
+
+def param_bool(params: Params, key: str) -> bool:
+  try:
+    return params.get_bool(key)
+  except Exception:
+    return False
 
 
 def local_ip() -> str:
@@ -73,8 +97,7 @@ def git_value(*args: str) -> str:
 
 def car_status() -> dict[str, str]:
   raw = Params().get("CarParams")
-  result = {"car": "아직 인식되지 않음", "longitudinal": "확인 불가", "radar": "확인 불가",
-            "fingerprint_source": "확인 불가"}
+  result = {"car": "아직 인식되지 않음", "longitudinal": "확인 불가", "radar": "확인 불가", "fingerprint_source": "확인 불가"}
   if raw:
     try:
       with car.CarParams.from_bytes(raw) as cp:
@@ -90,7 +113,7 @@ def car_status() -> dict[str, str]:
 def force_nexo_enabled() -> bool:
   try:
     return FORCE_NEXO_FILE.read_text(encoding="utf-8").strip() == "1"
-  except FileNotFoundError:
+  except (FileNotFoundError, OSError):
     return False
 
 
@@ -111,7 +134,7 @@ def set_vehicle(mode: str) -> None:
 
 def is_onroad() -> bool:
   params = Params()
-  return params.get_bool("IsOnroad") and not params.get_bool("IsOffroad")
+  return param_bool(params, "IsOnroad") and not param_bool(params, "IsOffroad")
 
 
 def parked_for_update() -> tuple[bool, str]:
@@ -123,7 +146,7 @@ def parked_for_update() -> tuple[bool, str]:
     if message is None:
       return False, "기어 상태 확인 불가"
     gear = message.carState.gearShifter
-    return (gear == car.CarState.GearShifter.park, "P" if gear == car.CarState.GearShifter.park else str(gear))
+    return gear == car.CarState.GearShifter.park, "P" if gear == car.CarState.GearShifter.park else str(gear)
   except Exception as error:
     return False, f"기어 상태 확인 실패: {error}"
 
@@ -136,8 +159,13 @@ def schedule_reboot(delay: float = 1.5) -> None:
 
 
 def update_status(fetch: bool = False) -> dict[str, str | bool]:
-  result: dict[str, str | bool] = {"current": git_value("rev-parse", "--short", "HEAD"), "remote": "확인 전",
-                                    "available": False, "dirty": bool(git_value("status", "--porcelain")), "error": ""}
+  result: dict[str, str | bool] = {
+    "current": git_value("rev-parse", "--short", "HEAD"),
+    "remote": "확인 전",
+    "available": False,
+    "dirty": bool(git_value("status", "--porcelain")),
+    "error": "",
+  }
   if fetch:
     fetched = git_run("fetch", "origin", BRANCH, timeout=60)
     if fetched.returncode != 0:
@@ -252,11 +280,11 @@ def settings_page(message: str = "") -> str:
   forced = force_nexo_enabled()
   rows = []
   for key, title, desc, reboot in TOGGLES:
-    checked = " checked" if params.get_bool(key) else ""
+    checked = " checked" if param_bool(params, key) else ""
     rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><input type="hidden" name="reboot" value="{'1' if reboot else '0'}"><div class="row"><div><div class="title">{title}</div><div class="desc">{desc}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
   number_rows = []
   for key, title, desc, hint, minimum, maximum, step, default in NUMERIC_SETTINGS:
-    raw = params.get(key, encoding="utf-8") or default
+    raw = param_text(params, key, default)
     number_rows.append(f'''<div class="number-item"><div class="title">{title}</div><div class="desc">{desc}</div><div class="desc">범위 {hint} · 권장값 {default}</div><form method="post" action="/value"><input type="hidden" name="key" value="{key}"><input type="number" name="value" value="{html.escape(raw)}" min="{minimum}" max="{maximum}" step="{step}"><button class="secondary" type="submit">저장</button></form></div>''')
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 차량 설정</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>차량 설정</h1>{msg}
@@ -277,7 +305,7 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/5.5"
+  server_version = "NexoPilotWeb/5.6"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -297,115 +325,123 @@ class Handler(BaseHTTPRequestHandler):
     self.end_headers()
 
   def do_GET(self) -> None:
-    parsed = urlparse(self.path)
-    query = parse_qs(parsed.query)
-    message = query.get("msg", [""])[0]
-    if parsed.path == "/live":
-      self._send(live_page())
-      return
-    if parsed.path == "/stream.mjpeg":
-      stream_camera(self)
-      return
-    if parsed.path == "/settings":
-      self._send(settings_page(message))
-      return
-    if parsed.path == "/diagnostics":
-      self._send(diagnostic_page(message))
-      return
-    if parsed.path not in ("/", "/index.html"):
-      self._send("찾을 수 없습니다", HTTPStatus.NOT_FOUND)
-      return
-    check = query.get("check", ["0"])[0] == "1"
-    status = car_status()
-    update = update_status(fetch=check)
-    msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
-    page = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot</title><style>{base_css()}</style></head><body><main><h1>NexoPilot</h1><div class="desc">콤마4 로컬 설정 · http://{html.escape(local_ip())}:{PORT}</div>{msg}
+    try:
+      parsed = urlparse(self.path)
+      query = parse_qs(parsed.query)
+      message = query.get("msg", [""])[0]
+      if parsed.path == "/live":
+        self._send(live_page())
+        return
+      if parsed.path == "/stream.mjpeg":
+        stream_camera(self)
+        return
+      if parsed.path == "/settings":
+        self._send(settings_page(message))
+        return
+      if parsed.path == "/diagnostics":
+        self._send(diagnostic_page(message))
+        return
+      if parsed.path not in ("/", "/index.html"):
+        self._send("찾을 수 없습니다", HTTPStatus.NOT_FOUND)
+        return
+      check = query.get("check", ["0"])[0] == "1"
+      status = car_status()
+      update = update_status(fetch=check)
+      msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
+      page = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot</title><style>{base_css()}</style></head><body><main><h1>NexoPilot</h1><div class="desc">콤마4 로컬 설정 · http://{html.escape(local_ip())}:{PORT}</div>{msg}
 <div class="card"><div class="row"><span>현재 차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div></div>
 <div class="card"><a href="/live"><button>실시간 전방 화면 열기</button></a><a href="/settings"><button class="secondary">차량 설정 열기</button></a><a href="/diagnostics"><button class="secondary">진단 도구 열기</button></a></div>
 <div class="card"><h2>웹 업데이트</h2><div class="desc">최신 버전을 확인하고 설치한 뒤 재부팅합니다.</div><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><p class="warning">차량 전원이 켜져 있을 때는 반드시 P단에서만 업데이트됩니다.</p><form method="get"><input type="hidden" name="check" value="1"><button class="secondary">업데이트 확인</button></form><form method="post" action="/update"><button>업데이트 설치 후 재부팅</button></form></div>
 <div class="card"><div class="row"><span>브랜치</span><span class="value">{html.escape(git_value('branch','--show-current'))}</span></div><div class="row"><span>커밋</span><span class="value">{html.escape(git_value('log','-1','--oneline'))}</span></div></div></main></body></html>'''
-    self._send(page)
+      self._send(page)
+    except Exception as error:
+      traceback.print_exc()
+      self._send(f"<h2>페이지 처리 오류</h2><pre>{html.escape(str(error))}</pre>", HTTPStatus.INTERNAL_SERVER_ERROR)
 
   def do_POST(self) -> None:
-    length = int(self.headers.get("Content-Length", "0"))
-    values = parse_qs(self.rfile.read(length).decode("utf-8"))
-    if self.path == "/vehicle":
-      if is_onroad():
-        self._redirect("주행 중에는 차량 설정을 바꿀 수 없습니다.", "/settings")
-        return
-      mode = values.get("vehicle", ["auto"])[0]
-      if mode not in ("auto", "nexo"):
-        self._send("잘못된 차량 선택", HTTPStatus.BAD_REQUEST)
-        return
-      set_vehicle(mode)
-      self._send("<h2>차량 설정 저장 완료. 재부팅합니다.</h2>")
-      schedule_reboot()
-      return
-    if self.path == "/toggle":
-      if is_onroad():
-        self._redirect("주행 중에는 설정을 바꿀 수 없습니다.", "/settings")
-        return
-      key = values.get("key", [""])[0]
-      allowed = {item[0] for item in TOGGLES}
-      if key not in allowed:
-        self._send("허용되지 않은 설정", HTTPStatus.BAD_REQUEST)
-        return
-      params = Params()
-      params.put_bool(key, not params.get_bool(key))
-      reboot = values.get("reboot", ["0"])[0] == "1"
-      if reboot:
-        clear_car_cache()
-        self._send("<h2>설정을 저장했습니다. 재부팅합니다.</h2>")
+    try:
+      length = int(self.headers.get("Content-Length", "0"))
+      values = parse_qs(self.rfile.read(length).decode("utf-8"))
+      if self.path == "/vehicle":
+        if is_onroad():
+          self._redirect("주행 중에는 차량 설정을 바꿀 수 없습니다.", "/settings")
+          return
+        mode = values.get("vehicle", ["auto"])[0]
+        if mode not in ("auto", "nexo"):
+          self._send("잘못된 차량 선택", HTTPStatus.BAD_REQUEST)
+          return
+        set_vehicle(mode)
+        self._send("<h2>차량 설정 저장 완료. 재부팅합니다.</h2>")
         schedule_reboot()
-      else:
-        self._redirect("설정을 저장했습니다.", "/settings")
-      return
-    if self.path == "/value":
-      if is_onroad():
-        self._redirect("주행 중에는 수치 설정을 바꿀 수 없습니다.", "/settings")
         return
-      key = values.get("key", [""])[0]
-      raw_value = values.get("value", [""])[0].strip()
-      spec = next((item for item in NUMERIC_SETTINGS if item[0] == key), None)
-      if spec is None:
-        self._send("허용되지 않은 수치 설정", HTTPStatus.BAD_REQUEST)
+      if self.path == "/toggle":
+        if is_onroad():
+          self._redirect("주행 중에는 설정을 바꿀 수 없습니다.", "/settings")
+          return
+        key = values.get("key", [""])[0]
+        allowed = {item[0] for item in TOGGLES}
+        if key not in allowed:
+          self._send("허용되지 않은 설정", HTTPStatus.BAD_REQUEST)
+          return
+        params = Params()
+        params.put_bool(key, not param_bool(params, key))
+        reboot = values.get("reboot", ["0"])[0] == "1"
+        if reboot:
+          clear_car_cache()
+          self._send("<h2>설정을 저장했습니다. 재부팅합니다.</h2>")
+          schedule_reboot()
+        else:
+          self._redirect("설정을 저장했습니다.", "/settings")
         return
-      try:
-        number = float(raw_value)
-      except ValueError:
-        self._redirect("숫자를 정확히 입력하세요.", "/settings")
+      if self.path == "/value":
+        if is_onroad():
+          self._redirect("주행 중에는 수치 설정을 바꿀 수 없습니다.", "/settings")
+          return
+        key = values.get("key", [""])[0]
+        raw_value = values.get("value", [""])[0].strip()
+        spec = next((item for item in NUMERIC_SETTINGS if item[0] == key), None)
+        if spec is None:
+          self._send("허용되지 않은 수치 설정", HTTPStatus.BAD_REQUEST)
+          return
+        try:
+          number = float(raw_value)
+        except ValueError:
+          self._redirect("숫자를 정확히 입력하세요.", "/settings")
+          return
+        minimum, maximum = spec[4], spec[5]
+        if not minimum <= number <= maximum:
+          self._redirect(f"허용 범위는 {minimum}~{maximum}입니다.", "/settings")
+          return
+        Params().put(key, raw_value)
+        self._redirect(f"{spec[1]} 값을 저장했습니다.", "/settings")
         return
-      minimum, maximum = spec[4], spec[5]
-      if not minimum <= number <= maximum:
-        self._redirect(f"허용 범위는 {minimum}~{maximum}입니다.", "/settings")
+      if self.path == "/update":
+        ok, result = perform_update()
+        if not ok:
+          self._redirect(result)
+          return
+        self._send(f"<h2>업데이트 완료</h2><pre>{html.escape(result)}</pre>")
+        schedule_reboot()
         return
-      Params().put(key, raw_value)
-      self._redirect(f"{spec[1]} 값을 저장했습니다.", "/settings")
-      return
-    if self.path == "/update":
-      ok, result = perform_update()
-      if not ok:
-        self._redirect(result)
+      if self.path == "/clear-cache":
+        if is_onroad():
+          self._redirect("주행 중에는 캐시를 지울 수 없습니다.", "/diagnostics")
+          return
+        clear_car_cache()
+        self._send("<h2>캐시를 초기화했습니다. 재부팅합니다.</h2>")
+        schedule_reboot()
         return
-      self._send(f"<h2>업데이트 완료</h2><pre>{html.escape(result)}</pre>")
-      schedule_reboot()
-      return
-    if self.path == "/clear-cache":
-      if is_onroad():
-        self._redirect("주행 중에는 캐시를 지울 수 없습니다.", "/diagnostics")
+      if self.path == "/reboot":
+        if is_onroad():
+          self._redirect("주행 중에는 재부팅할 수 없습니다.", "/diagnostics")
+          return
+        self._send("<h2>콤마4를 재부팅합니다.</h2>")
+        schedule_reboot()
         return
-      clear_car_cache()
-      self._send("<h2>캐시를 초기화했습니다. 재부팅합니다.</h2>")
-      schedule_reboot()
-      return
-    if self.path == "/reboot":
-      if is_onroad():
-        self._redirect("주행 중에는 재부팅할 수 없습니다.", "/diagnostics")
-        return
-      self._send("<h2>콤마4를 재부팅합니다.</h2>")
-      schedule_reboot()
-      return
-    self._send("찾을 수 없습니다", HTTPStatus.NOT_FOUND)
+      self._send("찾을 수 없습니다", HTTPStatus.NOT_FOUND)
+    except Exception as error:
+      traceback.print_exc()
+      self._send(f"<h2>설정 처리 오류</h2><pre>{html.escape(str(error))}</pre>", HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
 def main() -> None:
