@@ -108,8 +108,14 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_LIMITS_2.value
       ret.dashcamOnly = True
 
-    # Common longitudinal control setup
-    ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or Bus.radar not in DBC[ret.carFingerprint]
+    # Common longitudinal control setup. NEXO radar tracks are silent until
+    # DID 0x0142 is written, so fingerprinting must not require 0x500 first.
+    radar_dbc_available = Bus.radar in DBC[ret.carFingerprint]
+    if candidate == CAR.HYUNDAI_NEXO_1ST_GEN:
+      ret.radarUnavailable = not radar_dbc_available
+    else:
+      ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or not radar_dbc_available
+
     ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
     ret.startingState = True
@@ -161,15 +167,23 @@ class CarInterface(CarInterfaceBase):
       if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG.value:
         addr, bus = 0x730, CanBus(CP).ECAN
 
-      # NEXO: enable and verify MANDO radar tracks before disabling normal SCC
-      # communication. Failure is fail-closed so longitudinal control cannot
-      # start with an unverified radar state or a hidden AEB/FCW fault.
       disabling_normal_comms = communication_control[1] == (0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX)
-      if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and disabling_normal_comms:
-        if not enable_radar_tracks(can_recv, can_send, bus, retries=5):
-          raise RuntimeError("NEXO radar track activation failed; refusing longitudinal control")
+      is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
-      disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+      if is_nexo and disabling_normal_comms:
+        # Match the proven NEXOdriveAI order: stop normal SCC communication,
+        # then enter the radar diagnostic session and enable multi-track data.
+        # If activation fails, immediately restore stock communication so FCA
+        # and AEB warnings are not deliberately hidden or left latched.
+        disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+        if not enable_radar_tracks(can_recv, can_send, bus, retries=20):
+          restore_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
+                                   0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
+                                   uds.MESSAGE_TYPE.NORMAL])
+          disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=restore_control)
+          raise RuntimeError("NEXO radar track activation failed; stock SCC communication restored")
+      else:
+        disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
     # for blinkers
     if CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
