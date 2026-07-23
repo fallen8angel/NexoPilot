@@ -1,0 +1,48 @@
+name: NEXO validation
+
+on:
+  push:
+    branches: [NEXO]
+  pull_request:
+    branches: [NEXO]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-nexo-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile changed Python modules
+        run: |
+          python -m py_compile \
+            opendbc_repo/opendbc/car/hyundai/values.py \
+            opendbc_repo/opendbc/car/hyundai/carstate.py \
+            system/nexo_web/web.py
+      - name: Check NEXO integration invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          values = Path("opendbc_repo/opendbc/car/hyundai/values.py").read_text()
+          carstate = Path("opendbc_repo/opendbc/car/hyundai/carstate.py").read_text()
+          launch = Path("launch_openpilot.sh").read_text()
+          web = Path("system/nexo_web/web.py").read_text()
+
+          assert "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values
+          assert "tireStiffnessFactor=0.385" in values
+          assert "minEnableSpeed=10 * CV.KPH_TO_MS" in values
+          assert "P=0, D=5, N=6, R=7" in carstate
+          assert "self.nexo_cruise_enabled" in carstate
+          assert "apply_nexo_ai.py" not in launch
+          assert "SKIP_FW_QUERY" not in launch
+          assert "def _require_auth" in web
+          assert "def _same_origin" in web
+          assert "MAX_REQUEST_BODY" in web
+          assert not Path("tools/apply_nexo_ai.py").exists()
+          PY
