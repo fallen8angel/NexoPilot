@@ -62,6 +62,11 @@ class CarState(CarStateBase):
     self.cluster_speed_counter = CLUSTER_SAMPLE_RATE
 
     self.params = CarControllerParams(CP)
+    # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
+    self.gear_shifter = structs.CarState.GearShifter.park
+    # NEXO legacy cruise-state manager compatibility.
+    self.nexo_cruise_enabled = False
+    self.nexo_cruise_available = True
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -151,18 +156,32 @@ class CarState(CarStateBase):
 
     # Gear Selection via Cluster - For those Kia/Hyundai which are not fully discovered, we can use the Cluster Indicator for Gear Selection,
     # as this seems to be standard over all cars, but is not the preferred method.
-    if self.CP.flags & (HyundaiFlags.HYBRID | HyundaiFlags.EV):
-      gear = cp.vl["ELECT_GEAR"]["Elect_Gear_Shifter"]
-    elif self.CP.flags & HyundaiFlags.FCEV:
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      # Learned NEXO EMS20.HYDROGEN_GEAR_SHIFTER raw values:
+      # P=0, D=5, N=6, R=7. Unknown values retain the last valid gear.
       gear = cp.vl["EMS20"]["HYDROGEN_GEAR_SHIFTER"]
-    elif self.CP.flags & HyundaiFlags.CLUSTER_GEARS:
-      gear = cp.vl["CLU15"]["CF_Clu_Gear"]
-    elif self.CP.flags & HyundaiFlags.TCU_GEARS:
-      gear = cp.vl["TCU12"]["CUR_GR"]
+      gear_map = {
+        0: structs.CarState.GearShifter.park,
+        5: structs.CarState.GearShifter.drive,
+        6: structs.CarState.GearShifter.neutral,
+        7: structs.CarState.GearShifter.reverse,
+      }
+      if gear in gear_map:
+        self.gear_shifter = gear_map[gear]
+      ret.gearShifter = self.gear_shifter
     else:
-      gear = cp.vl["LVR12"]["CF_Lvr_Gear"]
+      if self.CP.flags & (HyundaiFlags.HYBRID | HyundaiFlags.EV):
+        gear = cp.vl["ELECT_GEAR"]["Elect_Gear_Shifter"]
+      elif self.CP.flags & HyundaiFlags.FCEV:
+        gear = cp.vl["EMS20"]["HYDROGEN_GEAR_SHIFTER"]
+      elif self.CP.flags & HyundaiFlags.CLUSTER_GEARS:
+        gear = cp.vl["CLU15"]["CF_Clu_Gear"]
+      elif self.CP.flags & HyundaiFlags.TCU_GEARS:
+        gear = cp.vl["TCU12"]["CUR_GR"]
+      else:
+        gear = cp.vl["LVR12"]["CF_Lvr_Gear"]
 
-    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
+      ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
 
     if not self.CP.openpilotLongitudinalControl or self.CP.flags & HyundaiFlags.CAMERA_SCC:
       aeb_src = "FCA11" if self.CP.flags & HyundaiFlags.USE_FCA.value else "SCC12"
@@ -192,6 +211,26 @@ class CarState(CarStateBase):
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
                         *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
+
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      enable_pressed = any(be.pressed and be.type in (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.mainCruise)
+                           for be in ret.buttonEvents)
+      cancel_pressed = any(be.pressed and be.type == ButtonType.cancel for be in ret.buttonEvents)
+
+      if enable_pressed:
+        self.nexo_cruise_available = True
+        self.nexo_cruise_enabled = True
+
+      if cancel_pressed:
+        # First CANCEL exits enabled control. A second CANCEL while already
+        # disabled clears availability, matching the older MED-mode flow.
+        if not self.nexo_cruise_enabled:
+          self.nexo_cruise_available = False
+        self.nexo_cruise_enabled = False
+
+      ret.cruiseState.available = ret.cruiseState.available and self.nexo_cruise_available
+      if self.nexo_cruise_enabled:
+        ret.cruiseState.enabled = True
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 
