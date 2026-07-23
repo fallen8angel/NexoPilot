@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+import base64
+import binascii
+import hmac
 import html
+import secrets
 import socket
 import subprocess
 import threading
@@ -18,7 +22,9 @@ PORT = 7000
 REPO_DIR = Path("/data/openpilot")
 STATE_DIR = Path("/data/nexopilot")
 FORCE_NEXO_FILE = STATE_DIR / "force_nexo"
+WEB_PASSWORD_FILE = STATE_DIR / "web_password"
 BRANCH = "NEXO"
+MAX_REQUEST_BODY = 64 * 1024
 
 # Only expose keys provided by the 11.1 base build. NEXO radar tracks are a
 # required vehicle capability and are enabled automatically in CarInterface.
@@ -29,6 +35,21 @@ TOGGLES = [
   ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 m 단위로 표시합니다.", False),
   ("IsLdwEnabled", "차선이탈 경고", "방향지시등 없이 차선을 벗어나면 경고를 표시합니다.", False),
 ]
+
+
+def web_password() -> str:
+  STATE_DIR.mkdir(parents=True, exist_ok=True)
+  try:
+    password = WEB_PASSWORD_FILE.read_text(encoding="utf-8").strip()
+    if password:
+      return password
+  except (FileNotFoundError, OSError):
+    pass
+
+  password = secrets.token_urlsafe(24)
+  WEB_PASSWORD_FILE.write_text(password, encoding="utf-8")
+  WEB_PASSWORD_FILE.chmod(0o600)
+  return password
 
 
 def param_bool(params: Params, key: str) -> bool:
@@ -177,19 +198,15 @@ def perform_update() -> tuple[bool, str]:
   dirty = git_run("status", "--porcelain", timeout=30)
   if dirty.returncode != 0:
     return False, dirty.stderr.strip() or "Git 상태 확인 실패"
-  stash_message = ""
   if dirty.stdout.strip():
-    stashed = git_run("stash", "push", "--include-untracked", "-m", "NexoPilot web auto-stash before update", timeout=60)
-    if stashed.returncode != 0:
-      return False, stashed.stderr.strip() or stashed.stdout.strip() or "로컬 변경 보관 실패"
-    stash_message = "\n로컬 변경 파일은 Git stash에 안전하게 보관했습니다."
+    return False, "로컬 변경사항이 있어 업데이트를 중단했습니다. 변경사항을 커밋하거나 직접 정리한 뒤 다시 시도하세요."
   fetched = git_run("fetch", "origin", BRANCH, timeout=60)
   if fetched.returncode != 0:
     return False, fetched.stderr.strip() or "git fetch 실패"
   merged = git_run("merge", "--ff-only", f"origin/{BRANCH}", timeout=60)
   if merged.returncode != 0:
     return False, merged.stderr.strip() or merged.stdout.strip() or "업데이트 적용 실패"
-  return True, (merged.stdout.strip() or "최신 버전입니다.") + stash_message
+  return True, merged.stdout.strip() or "최신 버전입니다."
 
 
 def tmux_output() -> str:
@@ -295,12 +312,41 @@ class Handler(BaseHTTPRequestHandler):
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
 
+  def _require_auth(self) -> bool:
+    header = self.headers.get("Authorization", "")
+    if header.startswith("Basic "):
+      try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        username, password = decoded.split(":", 1)
+        if hmac.compare_digest(username, "nexo") and hmac.compare_digest(password, web_password()):
+          return True
+      except (binascii.Error, UnicodeDecodeError, ValueError):
+        pass
+
+    self.send_response(HTTPStatus.UNAUTHORIZED)
+    self.send_header("WWW-Authenticate", 'Basic realm="NexoPilot", charset="UTF-8"')
+    self.send_header("Content-Length", "0")
+    self.end_headers()
+    return False
+
+  def _same_origin(self) -> bool:
+    expected = self.headers.get("Host", "")
+    origin = self.headers.get("Origin")
+    if origin:
+      return urlparse(origin).netloc == expected
+    referer = self.headers.get("Referer")
+    return bool(referer) and urlparse(referer).netloc == expected
+
   def _send(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
     data = body.encode("utf-8")
     self.send_response(status)
     self.send_header("Content-Type", "text/html; charset=utf-8")
     self.send_header("Content-Length", str(len(data)))
     self.send_header("Cache-Control", "no-store")
+    self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+    self.send_header("Referrer-Policy", "no-referrer")
+    self.send_header("X-Content-Type-Options", "nosniff")
+    self.send_header("X-Frame-Options", "DENY")
     self.end_headers()
     self.wfile.write(data)
 
@@ -317,6 +363,8 @@ class Handler(BaseHTTPRequestHandler):
     return False
 
   def do_GET(self) -> None:
+    if not self._require_auth():
+      return
     try:
       parsed = urlparse(self.path)
       query = parse_qs(parsed.query)
@@ -340,8 +388,16 @@ class Handler(BaseHTTPRequestHandler):
       self._send(f"<h2>페이지 오류</h2><pre>{html.escape(str(error))}</pre>", HTTPStatus.INTERNAL_SERVER_ERROR)
 
   def do_POST(self) -> None:
+    if not self._require_auth():
+      return
+    if not self._same_origin():
+      self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+      return
     try:
       length = int(self.headers.get("Content-Length", "0"))
+      if length < 0 or length > MAX_REQUEST_BODY:
+        self._send("요청이 너무 큽니다.", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        return
       values = parse_qs(self.rfile.read(length).decode("utf-8"))
       if self.path == "/vehicle":
         if not self._require_parked("/settings"): return
@@ -380,7 +436,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-  STATE_DIR.mkdir(parents=True, exist_ok=True)
+  password = web_password()
+  print(f"NexoPilot web: http://<device-ip>:{PORT} username=nexo password={password}")
   ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
