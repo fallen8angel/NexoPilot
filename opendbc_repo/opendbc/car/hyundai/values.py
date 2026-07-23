@@ -287,8 +287,9 @@ class CAR(Platforms):
     flags=HyundaiFlags.HYBRID | HyundaiFlags.ALT_LIMITS,
   )
   HYUNDAI_NEXO_1ST_GEN = HyundaiPlatformConfig(
-    [HyundaiCarDocs("Hyundai Nexo 2021", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
-    CarSpecs(mass=3990 * CV.LB_TO_KG, wheelbase=2.79, steerRatio=14.19, tireStiffnessFactor=0.385),  # https://www.hyundainews.com/assets/documents/original/42768-2021NEXOProductGuideSpecs.pdf
+    [HyundaiCarDocs("HYUNDAI NEXO", "All", car_parts=CarParts.common([CarHarness.hyundai_h]))],
+    CarSpecs(mass=1885, wheelbase=2.79, steerRatio=14.19, tireStiffnessFactor=0.385,
+             minEnableSpeed=10 * CV.KPH_TO_MS),
     flags=HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR,
   )
   HYUNDAI_SANTA_FE = HyundaiPlatformConfig(
