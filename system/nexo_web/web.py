@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-import base64
-import binascii
-import hmac
 import html
-import secrets
 import socket
 import subprocess
 import threading
@@ -22,7 +18,6 @@ PORT = 7000
 REPO_DIR = Path("/data/openpilot")
 STATE_DIR = Path("/data/nexopilot")
 FORCE_NEXO_FILE = STATE_DIR / "force_nexo"
-WEB_PASSWORD_FILE = STATE_DIR / "web_password"
 BRANCH = "NEXO"
 MAX_REQUEST_BODY = 64 * 1024
 
@@ -35,21 +30,6 @@ TOGGLES = [
   ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 m 단위로 표시합니다.", False),
   ("IsLdwEnabled", "차선이탈 경고", "방향지시등 없이 차선을 벗어나면 경고를 표시합니다.", False),
 ]
-
-
-def web_password() -> str:
-  STATE_DIR.mkdir(parents=True, exist_ok=True)
-  try:
-    password = WEB_PASSWORD_FILE.read_text(encoding="utf-8").strip()
-    if password:
-      return password
-  except (FileNotFoundError, OSError):
-    pass
-
-  password = secrets.token_urlsafe(24)
-  WEB_PASSWORD_FILE.write_text(password, encoding="utf-8")
-  WEB_PASSWORD_FILE.chmod(0o600)
-  return password
 
 
 def param_bool(params: Params, key: str) -> bool:
@@ -312,23 +292,6 @@ class Handler(BaseHTTPRequestHandler):
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
 
-  def _require_auth(self) -> bool:
-    header = self.headers.get("Authorization", "")
-    if header.startswith("Basic "):
-      try:
-        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
-        username, password = decoded.split(":", 1)
-        if hmac.compare_digest(username, "nexo") and hmac.compare_digest(password, web_password()):
-          return True
-      except (binascii.Error, UnicodeDecodeError, ValueError):
-        pass
-
-    self.send_response(HTTPStatus.UNAUTHORIZED)
-    self.send_header("WWW-Authenticate", 'Basic realm="NexoPilot", charset="UTF-8"')
-    self.send_header("Content-Length", "0")
-    self.end_headers()
-    return False
-
   def _same_origin(self) -> bool:
     expected = self.headers.get("Host", "")
     origin = self.headers.get("Origin")
@@ -363,8 +326,6 @@ class Handler(BaseHTTPRequestHandler):
     return False
 
   def do_GET(self) -> None:
-    if not self._require_auth():
-      return
     try:
       parsed = urlparse(self.path)
       query = parse_qs(parsed.query)
@@ -388,8 +349,6 @@ class Handler(BaseHTTPRequestHandler):
       self._send(f"<h2>페이지 오류</h2><pre>{html.escape(str(error))}</pre>", HTTPStatus.INTERNAL_SERVER_ERROR)
 
   def do_POST(self) -> None:
-    if not self._require_auth():
-      return
     if not self._same_origin():
       self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
       return
@@ -436,8 +395,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-  password = web_password()
-  print(f"NexoPilot web: http://<device-ip>:{PORT} username=nexo password={password}")
+  print(f"NexoPilot web: http://<device-ip>:{PORT}")
   ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
