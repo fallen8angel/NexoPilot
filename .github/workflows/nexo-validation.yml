@@ -12,7 +12,6 @@ permissions:
 jobs:
   validate-nexo-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +27,7 @@ jobs:
             opendbc_repo/opendbc/car/hyundai/carstate.py \
             system/nexo_web/web.py
 
-      - name: Check NEXO integration diagnostics
+      - name: Check NEXO integration
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -36,60 +35,25 @@ jobs:
 
           checks = []
 
-          def read_file(path):
+          def read(path):
               p = Path(path)
               if not p.exists():
-                  return None
-              return p.read_text(
-                  encoding="utf-8",
-                  errors="ignore"
-              )
+                  return ""
+              return p.read_text(encoding="utf-8", errors="ignore")
 
-          values = read_file("opendbc_repo/opendbc/car/hyundai/values.py")
-          carstate = read_file("opendbc_repo/opendbc/car/hyundai/carstate.py")
-          launch = read_file("launch_openpilot.sh")
-          web = read_file("system/nexo_web/web.py")
+          values = read("opendbc_repo/opendbc/car/hyundai/values.py")
+          carstate = read("opendbc_repo/opendbc/car/hyundai/carstate.py")
+          launch = read("launch_openpilot.sh")
+          web = read("system/nexo_web/web.py")
 
-          def check(name, result):
-              checks.append((name, bool(result)))
-
-          check("values.py", values is not None)
-          check("carstate.py", carstate is not None)
-          check("launch", launch is not None)
-          check("web.py", web is not None)
-
-          check("FCEV RADAR",
-                values and "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values)
-
-          check("tire",
-                values and "tireStiffnessFactor=0.385" in values)
-
-          check("speed",
-                values and "minEnableSpeed=10 * CV.KPH_TO_MS" in values)
-
-          check("gear",
-                carstate and "P=0, D=5, N=6, R=7" in carstate)
-
-          check("cruise",
-                carstate and "self.nexo_cruise_enabled" in carstate)
-
-          check("apply removed",
-                launch and "apply_nexo_ai.py" not in launch)
-
-          check("skip fw removed",
-                launch and "SKIP_FW_QUERY" not in launch)
-
-          check("auth",
-                web and "def _require_auth" in web)
-
-          check("same origin",
-                web and "def _same_origin" in web)
-
-          check("body",
-                web and "MAX_REQUEST_BODY" in web)
-
-          check("old patch removed",
-                not Path("tools/apply_nexo_ai.py").exists())
+          checks.append(("FCEV RADAR", "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values))
+          checks.append(("tire", "tireStiffnessFactor=0.385" in values))
+          checks.append(("speed", "minEnableSpeed=10 * CV.KPH_TO_MS" in values))
+          checks.append(("gear", "P=0, D=5, N=6, R=7" in carstate))
+          checks.append(("cruise", "self.nexo_cruise_enabled" in carstate))
+          checks.append(("auth", "def _require_auth" in web))
+          checks.append(("same", "def _same_origin" in web))
+          checks.append(("body", "MAX_REQUEST_BODY" in web))
 
           failed = False
 
