@@ -44,6 +44,12 @@ def manager_init() -> None:
     if default_value is not None and params.get(k) is None:
       params.put(k, default_value, block=True)
 
+  # NexoPilot ships with a complete Korean UI catalog. Migrate existing
+  # installations once, while keeping the language selector available afterwards.
+  if not params.get_bool("NexoKoreanLanguageApplied"):
+    params.put("LanguageSetting", "ko", block=True)
+    params.put_bool("NexoKoreanLanguageApplied", True, block=True)
+
   # Create folders needed for msgq
   try:
     os.mkdir(Paths.shm_path())
