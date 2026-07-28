@@ -298,7 +298,14 @@ class Handler(BaseHTTPRequestHandler):
     if origin:
       return urlparse(origin).netloc == expected
     referer = self.headers.get("Referer")
-    return bool(referer) and urlparse(referer).netloc == expected
+    if referer:
+      return urlparse(referer).netloc == expected
+
+    # Some mobile browsers omit both headers for local HTTP forms. Accept only
+    # requests the browser identifies as same-site (or legacy clients without
+    # Fetch Metadata); explicit cross-site requests remain blocked.
+    fetch_site = self.headers.get("Sec-Fetch-Site")
+    return fetch_site in (None, "same-origin", "same-site", "none")
 
   def _send(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
     data = body.encode("utf-8")
@@ -307,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
     self.send_header("Content-Length", str(len(data)))
     self.send_header("Cache-Control", "no-store")
     self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
-    self.send_header("Referrer-Policy", "no-referrer")
+    self.send_header("Referrer-Policy", "same-origin")
     self.send_header("X-Content-Type-Options", "nosniff")
     self.send_header("X-Frame-Options", "DENY")
     self.end_headers()
