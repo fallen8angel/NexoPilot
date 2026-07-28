@@ -38,6 +38,11 @@ def manager_init() -> None:
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True, block=True)
 
+  # Undo the previous forced Korean migration. Removing the saved value lets
+  # the normal English default restore the original UI font on this boot.
+  if params.get("LanguageSetting") == b"ko":
+    params.remove("LanguageSetting")
+
   # set unset params to their default value
   for k in params.all_keys():
     default_value = params.get_default_value(k)
