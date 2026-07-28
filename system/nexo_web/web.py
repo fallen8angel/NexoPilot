@@ -24,7 +24,7 @@ BRANCH = "NEXO"
 MAX_REQUEST_BODY = 64 * 1024
 WEBRTCD_URL = "http://127.0.0.1:5001/stream"
 WEB_CAMERA_MARKER = STATE_DIR / "web_camera_active"
-WEB_CAMERA_TIMEOUT = 15.0
+WEB_CAMERA_TIMEOUT = 0
 _camera_lock = threading.Lock()
 _camera_deadline = 0.0
 
@@ -196,8 +196,13 @@ def restore_web_camera() -> None:
 def camera_watchdog() -> None:
   while True:
     time.sleep(1.0)
+
+    if WEB_CAMERA_TIMEOUT <= 0:
+      continue
+
     with _camera_lock:
       expired = _camera_deadline > 0.0 and time.monotonic() > _camera_deadline
+
     if expired:
       restore_web_camera()
 
