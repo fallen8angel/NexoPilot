@@ -429,10 +429,14 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
+  
   server_version = "NexoPilotWeb/6.1"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
+
+  def _require_auth(self) -> bool:
+    return True
 
   def _same_origin(self) -> bool:
     expected = self.headers.get("Host", "")
