@@ -31,11 +31,11 @@ _camera_deadline = 0.0
 # Only expose keys provided by the 11.1 base build. NEXO radar tracks are a
 # required vehicle capability and are enabled automatically in CarInterface.
 TOGGLES = [
-  ("AlphaLongitudinalEnabled", "오픈파일럿 롱컨", "가속과 감속을 오픈파일럿이 제어합니다.", True),
-  ("OpenpilotEnabledToggle", "오픈파일럿 사용", "오픈파일럿 기능 전체를 켜거나 끕니다.", True),
-  ("ExperimentalMode", "실험 모드", "실험용 종방향 주행 기능을 사용합니다.", False),
-  ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 m 단위로 표시합니다.", False),
-  ("IsLdwEnabled", "차선이탈 경고", "방향지시등 없이 차선을 벗어나면 경고를 표시합니다.", False),
+  ("AlphaLongitudinalEnabled", "오픈파일럿 롱컨", "가속과 감속을 오픈파일럿이 제어합니다."),
+  ("OpenpilotEnabledToggle", "오픈파일럿 사용", "오픈파일럿 기능 전체를 켜거나 끕니다."),
+  ("ExperimentalMode", "실험 모드", "실험용 종방향 주행 기능을 사용합니다."),
+  ("IsMetric", "미터법 사용", "속도와 거리를 km/h 및 m 단위로 표시합니다."),
+  ("IsLdwEnabled", "차선이탈 경고", "방향지시등 없이 차선을 벗어나면 경고를 표시합니다."),
 ]
 
 
@@ -383,11 +383,11 @@ def settings_page(message: str = "") -> str:
   params = Params()
   forced = force_nexo_enabled()
   rows = []
-  for key, title, desc, reboot in TOGGLES:
+  for key, title, desc in TOGGLES:
     checked = " checked" if param_bool(params, key) else ""
-    rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><input type="hidden" name="reboot" value="{'1' if reboot else '0'}"><div class="row"><div><div class="title">{title}</div><div class="desc">{desc}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
+    rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><div class="row"><div><div class="title">{title}</div><div class="desc">{desc}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
-  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 차량 설정</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>차량 설정</h1>{msg}<div class="card"><div class="title">차량 선택</div><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button>차량 저장 후 재부팅</button></form><p class="warning">P단에서만 설정을 변경할 수 있습니다.</p></div><div class="card"><div class="row"><div><div class="title">레이더 트랙</div><div class="desc">넥쏘에서는 AI 방식으로 자동 활성화됩니다. 사용자가 끌 수 없습니다.</div></div><span class="value">자동</span></div></div><div class="card"><h2>주행 기능</h2>{''.join(rows)}</div></main></body></html>'''
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 차량 설정</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>차량 설정</h1>{msg}<div class="card"><div class="title">차량 선택</div><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button>차량 선택 저장</button></form><p class="warning">P단에서만 설정을 변경할 수 있습니다.</p></div><div class="card"><div class="row"><div><div class="title">레이더 트랙</div><div class="desc">넥쏘에서는 AI 방식으로 자동 활성화됩니다. 사용자가 끌 수 없습니다.</div></div><span class="value">자동</span></div></div><div class="card"><h2>주행 기능</h2>{''.join(rows)}</div><div class="card"><div class="title">설정 적용</div><div class="desc">차량 선택과 주행 기능을 모두 설정한 뒤 아래 버튼을 한 번만 누르세요.</div><form method="post" action="/settings/reboot"><button>저장하고 재부팅</button></form></div></main></body></html>'''
 
 
 def diagnostic_page(message: str = "") -> str:
@@ -397,7 +397,7 @@ def diagnostic_page(message: str = "") -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-  server_version = "NexoPilotWeb/6.0"
+  server_version = "NexoPilotWeb/6.1"
 
   def log_message(self, fmt: str, *args) -> None:
     print(f"NEXO web: {self.address_string()} - {fmt % args}")
@@ -508,8 +508,8 @@ class Handler(BaseHTTPRequestHandler):
         if mode not in ("auto", "nexo"):
           self._send("잘못된 차량 선택", HTTPStatus.BAD_REQUEST); return
         set_vehicle(mode)
-        self._send("<h2>차량 설정 저장 완료. 재부팅합니다.</h2>")
-        schedule_reboot(); return
+        self._redirect("차량 선택을 저장했습니다. 모든 설정을 마친 뒤 아래의 저장하고 재부팅 버튼을 눌러주세요.", "/settings")
+        return
       if self.path == "/toggle":
         if not self._require_parked("/settings"): return
         key = values.get("key", [""])[0]
@@ -519,12 +519,13 @@ class Handler(BaseHTTPRequestHandler):
         ok, error = put_param_bool(params, key, not param_bool(params, key))
         if not ok:
           self._redirect(f"이 설정은 현재 11.1 빌드에서 지원되지 않습니다: {error}", "/settings"); return
-        if values.get("reboot", ["0"])[0] == "1":
-          clear_car_cache()
-          self._send("<h2>설정을 저장했습니다. 재부팅합니다.</h2>")
-          schedule_reboot()
-        else:
-          self._redirect("설정을 저장했습니다.", "/settings")
+        self._redirect("설정을 저장했습니다. 다른 항목도 변경한 뒤 아래의 저장하고 재부팅 버튼을 눌러주세요.", "/settings")
+        return
+      if self.path == "/settings/reboot":
+        if not self._require_parked("/settings"): return
+        clear_car_cache()
+        self._send("<h2>설정을 모두 저장했습니다. 재부팅합니다.</h2>")
+        schedule_reboot()
         return
       if self.path == "/update":
         ok, result = perform_update()
