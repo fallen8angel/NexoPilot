@@ -32,10 +32,12 @@ jobs:
             system/nexo_web/web.py
 
       - name: Check NEXO integration
+        shell: python
         run: |
-          python - <<'PY'
           from pathlib import Path
           import sys
+
+          checks = []
 
           def read(path):
               p = Path(path)
@@ -51,40 +53,38 @@ jobs:
           launch = read("launch_openpilot.sh")
           web = read("system/nexo_web/web.py")
 
-          checks = [
-              ("FCEV RADAR",
-               "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values),
+          checks.append(("FCEV RADAR",
+              "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values))
 
-              ("tire stiffness",
-               "tireStiffnessFactor=0.385" in values),
+          checks.append(("tire stiffness",
+              "tireStiffnessFactor=0.385" in values))
 
-              ("speed",
-               "minEnableSpeed=10 * CV.KPH_TO_MS" in values),
+          checks.append(("speed",
+              "minEnableSpeed=10 * CV.KPH_TO_MS" in values))
 
-              ("gear",
-               "P=0, D=5, N=6, R=7" in carstate),
+          checks.append(("gear",
+              "P=0, D=5, N=6, R=7" in carstate))
 
-              ("cruise",
-               "self.nexo_cruise_enabled" in carstate),
+          checks.append(("cruise",
+              "self.nexo_cruise_enabled" in carstate))
 
-              ("apply removed",
-               "apply_nexo_ai.py" not in launch),
+          checks.append(("apply removed",
+              "apply_nexo_ai.py" not in launch))
 
-              ("skip fw removed",
-               "SKIP_FW_QUERY" not in launch),
+          checks.append(("skip fw removed",
+              "SKIP_FW_QUERY" not in launch))
 
-              ("auth",
-               "def _require_auth" in web),
+          checks.append(("auth",
+              "def _require_auth" in web))
 
-              ("same origin",
-               "def _same_origin" in web),
+          checks.append(("same origin",
+              "def _same_origin" in web))
 
-              ("request body",
-               "MAX_REQUEST_BODY" in web),
+          checks.append(("request body",
+              "MAX_REQUEST_BODY" in web))
 
-              ("old patch removed",
-               not Path("tools/apply_nexo_ai.py").exists())
-          ]
+          checks.append(("old patch removed",
+              not Path("tools/apply_nexo_ai.py").exists()))
 
           failed = False
 
@@ -97,4 +97,3 @@ jobs:
               sys.exit(1)
 
           print("NEXO validation PASS")
-          PY
