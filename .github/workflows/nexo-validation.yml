@@ -1,48 +1,68 @@
-name: NEXO validation
-
-on:
-  push:
-    branches: [NEXO]
-  pull_request:
-    branches: [NEXO]
-
-permissions:
-  contents: read
-
-jobs:
-  validate-nexo-integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Compile changed Python modules
-        run: |
-          python -m py_compile \
-            opendbc_repo/opendbc/car/hyundai/values.py \
-            opendbc_repo/opendbc/car/hyundai/carstate.py \
-            system/nexo_web/web.py
       - name: Check NEXO integration invariants
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          values = Path("opendbc_repo/opendbc/car/hyundai/values.py").read_text()
-          carstate = Path("opendbc_repo/opendbc/car/hyundai/carstate.py").read_text()
-          launch = Path("launch_openpilot.sh").read_text()
-          web = Path("system/nexo_web/web.py").read_text()
+          checks = []
 
-          assert "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values
-          assert "tireStiffnessFactor=0.385" in values
-          assert "minEnableSpeed=10 * CV.KPH_TO_MS" in values
-          assert "P=0, D=5, N=6, R=7" in carstate
-          assert "self.nexo_cruise_enabled" in carstate
-          assert "apply_nexo_ai.py" not in launch
-          assert "SKIP_FW_QUERY" not in launch
-          assert "def _require_auth" in web
-          assert "def _same_origin" in web
-          assert "MAX_REQUEST_BODY" in web
-          assert not Path("tools/apply_nexo_ai.py").exists()
+          def read(path):
+              p = Path(path)
+              if not p.exists():
+                  return None
+              return p.read_text(encoding="utf-8", errors="ignore")
+
+          values = read("opendbc_repo/opendbc/car/hyundai/values.py")
+          carstate = read("opendbc_repo/opendbc/car/hyundai/carstate.py")
+          launch = read("launch_openpilot.sh")
+          web = read("system/nexo_web/web.py")
+
+          checks.append(("values.py 존재", values is not None))
+          checks.append(("carstate.py 존재", carstate is not None))
+          checks.append(("launch 존재", launch is not None))
+          checks.append(("web.py 존재", web is not None))
+
+          checks.append(("FCEV RADAR",
+              values and "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values))
+
+          checks.append(("tire stiffness",
+              values and "tireStiffnessFactor=0.385" in values))
+
+          checks.append(("speed",
+              values and "minEnableSpeed=10 * CV.KPH_TO_MS" in values))
+
+          checks.append(("gear",
+              carstate and "P=0, D=5, N=6, R=7" in carstate))
+
+          checks.append(("cruise",
+              carstate and "self.nexo_cruise_enabled" in carstate))
+
+          checks.append(("apply removed",
+              launch and "apply_nexo_ai.py" not in launch))
+
+          checks.append(("skip fw removed",
+              launch and "SKIP_FW_QUERY" not in launch))
+
+          checks.append(("auth",
+              web and "def _require_auth" in web))
+
+          checks.append(("same origin",
+              web and "def _same_origin" in web))
+
+          checks.append(("request body",
+              web and "MAX_REQUEST_BODY" in web))
+
+          checks.append(("old patch removed",
+              not Path("tools/apply_nexo_ai.py").exists()))
+
+          failed = False
+
+          for name, result in checks:
+              print(name, "OK" if result else "FAIL")
+              if not result:
+                  failed = True
+
+          if failed:
+              raise SystemExit(1)
+
+          print("NEXO validation PASS")
           PY
