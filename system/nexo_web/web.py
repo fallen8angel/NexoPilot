@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import html
+import json
 import socket
 import subprocess
 import threading
@@ -9,6 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
 
 from cereal import car, messaging
 from openpilot.common.params import Params
@@ -20,6 +22,11 @@ STATE_DIR = Path("/data/nexopilot")
 FORCE_NEXO_FILE = STATE_DIR / "force_nexo"
 BRANCH = "NEXO"
 MAX_REQUEST_BODY = 64 * 1024
+WEBRTCD_URL = "http://127.0.0.1:5001/stream"
+WEB_CAMERA_MARKER = STATE_DIR / "web_camera_active"
+WEB_CAMERA_TIMEOUT = 15.0
+_camera_lock = threading.Lock()
+_camera_deadline = 0.0
 
 # Only expose keys provided by the 11.1 base build. NEXO radar tracks are a
 # required vehicle capability and are enabled automatically in CarInterface.
@@ -153,6 +160,57 @@ def schedule_reboot(delay: float = 1.5) -> None:
   threading.Thread(target=reboot, daemon=True).start()
 
 
+def start_web_camera() -> None:
+  global _camera_deadline
+  with _camera_lock:
+    if not WEB_CAMERA_MARKER.exists():
+      params = Params()
+      STATE_DIR.mkdir(parents=True, exist_ok=True)
+      WEB_CAMERA_MARKER.write_text("1" if param_bool(params, "IsDriverViewEnabled") else "0", encoding="utf-8")
+    Params().put_bool("IsDriverViewEnabled", True)
+    _camera_deadline = time.monotonic() + WEB_CAMERA_TIMEOUT
+
+
+def touch_web_camera() -> None:
+  global _camera_deadline
+  with _camera_lock:
+    if WEB_CAMERA_MARKER.exists():
+      _camera_deadline = time.monotonic() + WEB_CAMERA_TIMEOUT
+
+
+def restore_web_camera() -> None:
+  global _camera_deadline
+  with _camera_lock:
+    try:
+      previous = WEB_CAMERA_MARKER.read_text(encoding="utf-8").strip() == "1"
+    except (FileNotFoundError, OSError):
+      _camera_deadline = 0.0
+      return
+    try:
+      Params().put_bool("IsDriverViewEnabled", previous)
+      WEB_CAMERA_MARKER.unlink(missing_ok=True)
+    finally:
+      _camera_deadline = 0.0
+
+
+def camera_watchdog() -> None:
+  while True:
+    time.sleep(1.0)
+    with _camera_lock:
+      expired = _camera_deadline > 0.0 and time.monotonic() > _camera_deadline
+    if expired:
+      restore_web_camera()
+
+
+def proxy_webrtc_offer(payload: bytes) -> tuple[int, bytes]:
+  request = Request(WEBRTCD_URL, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+  try:
+    with urlopen(request, timeout=20) as response:
+      return response.status, response.read()
+  except Exception as error:
+    return HTTPStatus.BAD_GATEWAY, json.dumps({"error": f"영상 연결 실패: {error}"}).encode("utf-8")
+
+
 def update_status(fetch: bool = False) -> dict[str, str | bool]:
   result: dict[str, str | bool] = {
     "current": git_value("rev-parse", "--short", "HEAD"),
@@ -244,29 +302,81 @@ a{color:#8eafff;text-decoration:none}.card{background:#151821;border:1px solid #
 
 
 def live_page() -> str:
-  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 실시간 화면</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>실시간 전방 화면</h1><div class="card"><img style="width:100%;border-radius:18px" src="/stream.mjpeg"></div></main></body></html>'''
+  page = '''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 실시간 카메라</title><style>__CSS__
+.camera-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.camera-tabs button{font-size:14px;padding:12px 6px;margin:0;background:#41495b}.camera-tabs button.active{background:#3159d9}.video-wrap{position:relative;aspect-ratio:16/9;background:#000;border-radius:18px;overflow:hidden}.video-wrap video{width:100%;height:100%;object-fit:contain}.camera-status{position:absolute;left:12px;bottom:10px;background:#000b;padding:7px 10px;border-radius:10px;font-size:13px}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>실시간 카메라</h1><div class="card"><div class="camera-tabs"><button data-camera="wideRoad">1 전방 광각</button><button class="active" data-camera="road">2 전방 일반</button><button data-camera="driver">3 실내·운전자</button></div><div class="video-wrap"><video id="cameraVideo" autoplay muted playsinline></video><div id="cameraStatus" class="camera-status">카메라 준비 중</div></div><p class="desc">차량 연결 없이도 콤마 전원과 Wi-Fi만 연결되어 있으면 볼 수 있습니다. 3번은 차량 뒤쪽이 아니라 콤마가 실내를 향해 보는 운전자 카메라입니다.</p></div></main><script>
+let pc=null;
+let selected="road";
+let heartbeat=null;
+const video=document.getElementById("cameraVideo");
+const statusBox=document.getElementById("cameraStatus");
 
+function waitForIce(connection){
+  if(connection.iceGatheringState==="complete") return Promise.resolve();
+  return new Promise(resolve=>{
+    const check=()=>{
+      if(connection.iceGatheringState==="complete"){
+        connection.removeEventListener("icegatheringstatechange",check);
+        resolve();
+      }
+    };
+    connection.addEventListener("icegatheringstatechange",check);
+  });
+}
 
-def stream_camera(handler: BaseHTTPRequestHandler) -> None:
-  handler.send_response(HTTPStatus.OK)
-  handler.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-  handler.send_header("Cache-Control", "no-store")
-  handler.end_headers()
-  sock = messaging.sub_sock("thumbnail", conflate=True)
-  try:
-    while True:
-      message = messaging.recv_one(sock)
-      if message is None:
-        continue
-      frame = bytes(message.thumbnail.thumbnail)
-      if not frame:
-        continue
-      handler.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
-      handler.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
-      handler.wfile.write(frame + b"\r\n")
-      handler.wfile.flush()
-  except (BrokenPipeError, ConnectionResetError):
-    pass
+async function post(path,body){
+  return fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:body||"{}"});
+}
+
+async function connectCamera(camera){
+  selected=camera;
+  document.querySelectorAll("[data-camera]").forEach(button=>button.classList.toggle("active",button.dataset.camera===camera));
+  statusBox.textContent="카메라 연결 중";
+  if(pc){pc.close();pc=null;}
+  video.srcObject=null;
+  await post("/camera/start");
+  await new Promise(resolve=>setTimeout(resolve,1800));
+  const connection=new RTCPeerConnection({sdpSemantics:"unified-plan"});
+  pc=connection;
+  connection.addTransceiver("video",{direction:"recvonly"});
+  connection.addEventListener("track",event=>{
+    video.srcObject=event.streams[0];
+    statusBox.textContent=document.querySelector("[data-camera].active").textContent;
+  });
+  connection.addEventListener("connectionstatechange",()=>{
+    if(["failed","disconnected","closed"].includes(connection.connectionState)){
+      statusBox.textContent="영상 연결이 끊겼습니다";
+    }
+  });
+  const offer=await connection.createOffer();
+  await connection.setLocalDescription(offer);
+  await waitForIce(connection);
+  const response=await post("/webrtc",JSON.stringify({
+    sdp:connection.localDescription.sdp,
+    cameras:[camera],
+    bridge_services_in:[],
+    bridge_services_out:[]
+  }));
+  const answer=await response.json();
+  if(!response.ok) throw new Error(answer.error||"영상 연결 실패");
+  await connection.setRemoteDescription(answer);
+}
+
+document.querySelectorAll("[data-camera]").forEach(button=>button.addEventListener("click",()=>{
+  connectCamera(button.dataset.camera).catch(error=>statusBox.textContent=error.message);
+}));
+
+post("/camera/start").then(()=>{
+  heartbeat=setInterval(()=>post("/camera/heartbeat"),5000);
+  return connectCamera(selected);
+}).catch(error=>statusBox.textContent=error.message);
+
+window.addEventListener("pagehide",()=>{
+  if(heartbeat) clearInterval(heartbeat);
+  if(pc) pc.close();
+  navigator.sendBeacon("/camera/stop","");
+});
+</script></body></html>'''
+  return page.replace("__CSS__", base_css())
 
 
 def settings_page(message: str = "") -> str:
@@ -320,6 +430,14 @@ class Handler(BaseHTTPRequestHandler):
     self.end_headers()
     self.wfile.write(data)
 
+  def _send_json(self, data: bytes, status: int = HTTPStatus.OK) -> None:
+    self.send_response(status)
+    self.send_header("Content-Type", "application/json; charset=utf-8")
+    self.send_header("Content-Length", str(len(data)))
+    self.send_header("Cache-Control", "no-store")
+    self.end_headers()
+    self.wfile.write(data)
+
   def _redirect(self, message: str, path: str = "/") -> None:
     self.send_response(HTTPStatus.SEE_OTHER)
     self.send_header("Location", f"{path}?msg={quote(message)}")
@@ -339,8 +457,6 @@ class Handler(BaseHTTPRequestHandler):
       message = query.get("msg", [""])[0]
       if parsed.path == "/live":
         self._send(live_page()); return
-      if parsed.path == "/stream.mjpeg":
-        stream_camera(self); return
       if parsed.path == "/settings":
         self._send(settings_page(message)); return
       if parsed.path == "/diagnostics":
@@ -364,7 +480,28 @@ class Handler(BaseHTTPRequestHandler):
       if length < 0 or length > MAX_REQUEST_BODY:
         self._send("요청이 너무 큽니다.", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
         return
-      values = parse_qs(self.rfile.read(length).decode("utf-8"))
+      body = self.rfile.read(length)
+      if self.path == "/camera/start":
+        start_web_camera()
+        self._send_json(b'{"ok":true}')
+        return
+      if self.path == "/camera/heartbeat":
+        touch_web_camera()
+        self._send_json(b'{"ok":true}')
+        return
+      if self.path == "/camera/stop":
+        global _camera_deadline
+        with _camera_lock:
+          if _camera_deadline > 0.0:
+            _camera_deadline = min(_camera_deadline, time.monotonic() + 2.0)
+        self._send_json(b'{"ok":true}')
+        return
+      if self.path == "/webrtc":
+        start_web_camera()
+        status, answer = proxy_webrtc_offer(body)
+        self._send_json(answer, status)
+        return
+      values = parse_qs(body.decode("utf-8"))
       if self.path == "/vehicle":
         if not self._require_parked("/settings"): return
         mode = values.get("vehicle", ["auto"])[0]
@@ -402,6 +539,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+  restore_web_camera()
+  threading.Thread(target=camera_watchdog, daemon=True).start()
   print(f"NexoPilot web: http://<device-ip>:{PORT}")
   ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
