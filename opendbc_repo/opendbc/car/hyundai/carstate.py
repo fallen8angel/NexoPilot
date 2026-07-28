@@ -64,9 +64,10 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # NEXO legacy cruise-state manager compatibility.
+    # NEXO longitudinal cruise state. Stock SCC is disabled while openpilot
+    # longitudinal control is active, so button state must be tracked locally.
     self.nexo_cruise_enabled = False
-    self.nexo_cruise_available = True
+    self.nexo_cruise_available = False
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -124,8 +125,15 @@ class CarState(CarStateBase):
     # cruise state
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
-      ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
-      ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
+      if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+        # NEXOdriveAI proved that the NEXO must keep its own cruise main state
+        # after stock SCC communication is disabled. TCS13.ACCEnable is still
+        # used for fault reporting below, but not as the cruise button latch.
+        ret.cruiseState.available = self.nexo_cruise_available
+        ret.cruiseState.enabled = self.nexo_cruise_enabled
+      else:
+        ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
+        ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
       ret.cruiseState.nonAdaptive = False
     else:
@@ -212,25 +220,36 @@ class CarState(CarStateBase):
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
                         *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
 
-    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
-      enable_pressed = any(be.pressed and be.type in (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.mainCruise)
-                           for be in ret.buttonEvents)
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
+      main_pressed = any(be.pressed and be.type == ButtonType.mainCruise for be in ret.buttonEvents)
+      enable_released = any(not be.pressed and be.type in (ButtonType.accelCruise, ButtonType.decelCruise)
+                            for be in ret.buttonEvents)
       cancel_pressed = any(be.pressed and be.type == ButtonType.cancel for be in ret.buttonEvents)
 
-      if enable_pressed:
-        self.nexo_cruise_available = True
+      # Match the button flow that was proven on NEXOdriveAI:
+      # MAIN toggles cruise availability, and SET/RES engages on release.
+      if main_pressed:
+        self.nexo_cruise_available = not self.nexo_cruise_available
+        if not self.nexo_cruise_available:
+          self.nexo_cruise_enabled = False
+
+      if enable_released and self.nexo_cruise_available:
         self.nexo_cruise_enabled = True
 
       if cancel_pressed:
         # First CANCEL exits enabled control. A second CANCEL while already
-        # disabled clears availability, matching the older MED-mode flow.
+        # disabled clears availability, matching the proven legacy flow.
         if not self.nexo_cruise_enabled:
           self.nexo_cruise_available = False
         self.nexo_cruise_enabled = False
 
-      ret.cruiseState.available = ret.cruiseState.available and self.nexo_cruise_available
-      if self.nexo_cruise_enabled:
-        ret.cruiseState.enabled = True
+      # Keep openpilot's brake disengagement and panda's independent brake and
+      # CANCEL safety checks. Braking does not turn the cruise main state off.
+      if ret.brakePressed:
+        self.nexo_cruise_enabled = False
+
+      ret.cruiseState.available = self.nexo_cruise_available
+      ret.cruiseState.enabled = self.nexo_cruise_enabled
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 
