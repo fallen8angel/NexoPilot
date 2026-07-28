@@ -44,11 +44,6 @@ def manager_init() -> None:
     if default_value is not None and params.get(k) is None:
       params.put(k, default_value, block=True)
 
-  # Keep the NexoPilot device UI in Korean without introducing a new Params key.
-  # This also migrates existing installations that previously saved another language.
-  if params.get("LanguageSetting") != b"ko":
-    params.put("LanguageSetting", "ko", block=True)
-
   # Create folders needed for msgq
   try:
     os.mkdir(Paths.shm_path())
@@ -160,7 +155,7 @@ def manager_thread() -> None:
     print(running)
     cloudlog.debug(running)
 
-    # send managerState
+    # update managerState
     msg = messaging.new_message('managerState', valid=True)
     msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
     pm.send('managerState', msg)
@@ -190,7 +185,6 @@ def main() -> None:
   if os.getenv("PREPAREONLY") is not None:
     return
 
-  # SystemExit on sigterm
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(1))
 
   try:
