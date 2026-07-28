@@ -398,7 +398,34 @@ def settings_page(message: str = "") -> str:
 def diagnostic_page(message: str = "") -> str:
   status = car_status()
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
-  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>진단 도구</h1>{msg}<div class="card"><div class="row"><span>차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div><div class="row"><span>레이더 모드</span><span class="value">자동 활성화</span></div></div><div class="card"><h2>레이더·FCA 핵심 로그</h2><pre>{html.escape(radar_diagnostic_output())}</pre></div><div class="card"><h2>tmux 로그</h2><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><pre>{html.escape(system_output())}</pre></div></main></body></html>'''
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>진단 도구</h1>{msg}<div class="card"><div class="row"><span>차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div><div class="row"><span>레이더 모드</span><span class="value">자동 활성화</span></div></div><div class="card">
+<h2>NEXO 상세 진단</h2>
+<pre>
+차량 상태
+- 속도 : 확인 중
+- 기어 : 확인 중
+- 브레이크 : 확인 중
+- 가속 : 확인 중
+- 조향 : 확인 중
+
+롱컨 상태
+- ACC Enable : 확인 중
+- MainMode_ACC : 확인 중
+- ACCMode : 확인 중
+
+조향 상태
+- 목표 조향각
+- 현재 조향각
+- 토크 보정
+
+버튼 로그
+- MODE
+- SET
+- RES
+- CANCEL
+</pre>
+</div>
+<div class="card"><h2>레이더·FCA 핵심 로그</h2><pre>{html.escape(radar_diagnostic_output())}</pre></div><div class="card"><h2>tmux 로그</h2><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><pre>{html.escape(system_output())}</pre></div></main></body></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
