@@ -155,7 +155,7 @@ def manager_thread() -> None:
     print(running)
     cloudlog.debug(running)
 
-    # update managerState
+    # send managerState
     msg = messaging.new_message('managerState', valid=True)
     msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
     pm.send('managerState', msg)
@@ -185,6 +185,7 @@ def main() -> None:
   if os.getenv("PREPAREONLY") is not None:
     return
 
+  # SystemExit on sigterm
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(1))
 
   try:
