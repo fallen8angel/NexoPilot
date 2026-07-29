@@ -104,6 +104,10 @@ jobs:
               "ret.alphaLongitudinalAvailable if is_nexo" in interface and
               "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" in interface and
               "ret.safetyConfigs[-1].safetyParam |= nexo_safety_param.value" in interface))
+          checks.append(("NEXO radar configure before SCC silence",
+              interface.index("if not enable_radar_tracks") <
+              interface.index("if not disable_ecu", interface.index("if not enable_radar_tracks")) and
+              "NEXO stock SCC communication could not be disabled" in interface))
 
           checks.append(("apply removed",
               "apply_nexo_ai.py" not in launch))

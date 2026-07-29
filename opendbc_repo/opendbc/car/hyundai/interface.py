@@ -182,17 +182,15 @@ class CarInterface(CarInterfaceBase):
       is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
       if is_nexo and disabling_normal_comms:
-        # Match the proven NEXOdriveAI order: stop normal SCC communication,
-        # then enter the radar diagnostic session and enable multi-track data.
-        # If activation fails, immediately restore stock communication so FCA
-        # and AEB warnings are not deliberately hidden or left latched.
-        disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+        # Enabling radar tracks enters another diagnostic session. Do that
+        # first, then make communication-control the final UDS operation.
+        # Otherwise the session change can wake stock SCC back up, trigger
+        # Panda relay-malfunction protection, and reject every replacement
+        # SCC/FCA frame even with the correct LONG safety parameter.
         if not enable_radar_tracks(can_recv, can_send, bus, retries=20):
-          restore_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
-                                   0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
-                                   uds.MESSAGE_TYPE.NORMAL])
-          disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=restore_control)
-          raise RuntimeError("NEXO radar track activation failed; stock SCC communication restored")
+          raise RuntimeError("NEXO radar track activation failed; stock SCC left enabled")
+        if not disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control):
+          raise RuntimeError("NEXO stock SCC communication could not be disabled")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
