@@ -137,6 +137,34 @@ def is_onroad() -> bool:
   return param_bool(params, "IsOnroad") and not param_bool(params, "IsOffroad")
 
 
+def nexo_raw_can_parked(timeout: float = 1.5, required_samples: int = 3) -> bool:
+  """Confirm NEXO Park directly from live EMS20 when card is unavailable."""
+  sock = messaging.sub_sock("can", conflate=False, timeout=250)
+  deadline = time.monotonic() + timeout
+  parked_samples = 0
+
+  while time.monotonic() < deadline:
+    packet = messaging.recv_one(sock)
+    if packet is None:
+      continue
+
+    for frame in packet.can:
+      if frame.src != 0 or frame.address != 0x200 or len(frame.dat) < 2:
+        continue
+
+      # EMS20.HYDROGEN_GEAR_SHIFTER: little-endian bits 11..13.
+      # Learned NEXO values: P=0, D=5, N=6, R=7.
+      raw_gear = (int.from_bytes(frame.dat, "little") >> 11) & 0x7
+      if raw_gear != 0:
+        return False
+
+      parked_samples += 1
+      if parked_samples >= required_samples:
+        return True
+
+  return False
+
+
 def parked_state() -> tuple[bool, str]:
   if not is_onroad():
     return True, "오프로드"
@@ -144,12 +172,19 @@ def parked_state() -> tuple[bool, str]:
     sock = messaging.sub_sock("carState", conflate=True, timeout=1500)
     message = messaging.recv_one(sock)
     if message is None:
+      if nexo_raw_can_parked():
+        return True, "P (원시 CAN)"
       return False, "기어 상태 확인 불가"
     gear = message.carState.gearShifter
     if gear == car.CarState.GearShifter.park:
       return True, "P"
     return False, str(gear)
   except Exception as error:
+    try:
+      if nexo_raw_can_parked():
+        return True, "P (원시 CAN)"
+    except Exception:
+      pass
     return False, f"기어 상태 확인 실패: {error}"
 
 
