@@ -153,7 +153,12 @@ class CarController(CarControllerBase):
       # TODO: unclear if this is needed
       jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
       use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
-      can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
+      acc_enabled = CC.enabled
+      if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+        # NEXOdriveAI only activates SCC after TCS/ESC confirms ACC_REQ.
+        # Sending active SCC12/SCC14 before this confirmation latches ACCEnable.
+        acc_enabled = acc_enabled and CS.out.cruiseState.enabled
+      can_sends.extend(hyundaican.create_acc_commands(self.packer, acc_enabled, accel, jerk, int(self.frame / 2),
                                                       hud_control, set_speed_in_units, stopping,
                                                       CC.cruiseControl.override, use_fca, self.CP,
                                                       CS.out.cruiseState.available))

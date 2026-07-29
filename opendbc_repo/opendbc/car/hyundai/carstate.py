@@ -66,9 +66,8 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # Stock SCC is disabled for NEXO longitudinal control. Keep only the driver's
-    # MAIN selection locally; actual ACC engagement must be confirmed by TCS13.
-    self.nexo_cruise_available = False
+    # Stock SCC is disabled for NEXO longitudinal control. Actual availability
+    # and engagement are confirmed by TCS13 rather than a local MAIN latch.
     self.nexo_controls_ready_frames = 0
     self.op_params = Params()
 
@@ -136,11 +135,9 @@ class CarState(CarStateBase):
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
-        # Keep MAIN locally after disabling stock SCC, but only advertise it once
-        # card/controls have settled. Engagement is vehicle-confirmed: treating a
-        # SET/RES press itself as active can transmit SCC control before TCS/ESC
-        # accepts ACC and cause a latched ACCEnable fault.
-        ret.cruiseState.available = self.nexo_cruise_available and nexo_controls_ready
+        # Let the vehicle own its CRUISE/LIMIT selection. Mirroring MAIN with a
+        # local latch can fight the cluster state and leave LIMIT stuck.
+        ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0 and nexo_controls_ready
         ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       else:
         ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
@@ -227,28 +224,15 @@ class CarState(CarStateBase):
     if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
       self.lda_button = cp.vl["BCM_PO_11"]["LDA_BTN"]
 
-    ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
-                        *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
-                        *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
-
+    main_button_events = create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise})
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
-      main_pressed = any(be.pressed and be.type == ButtonType.mainCruise for be in ret.buttonEvents)
-      cancel_pressed = any(be.pressed and be.type == ButtonType.cancel for be in ret.buttonEvents)
-      vehicle_acc_enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
+      # NEXO's MAIN button cycles the vehicle cluster between CRUISE and LIMIT.
+      # Do not reinterpret it as an openpilot enable/toggle event.
+      main_button_events = []
 
-      # MAIN controls standby availability. SET/RES is still delivered as a
-      # button event to selfdrived, but TCS13 must confirm actual engagement.
-      if main_pressed:
-        self.nexo_cruise_available = not self.nexo_cruise_available
-
-      if cancel_pressed:
-        # First CANCEL exits active control. A second CANCEL while TCS13 already
-        # reports inactive clears MAIN availability.
-        if not vehicle_acc_enabled:
-          self.nexo_cruise_available = False
-
-      ret.cruiseState.available = self.nexo_cruise_available and nexo_controls_ready
-      ret.cruiseState.enabled = vehicle_acc_enabled
+    ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
+                        *main_button_events,
+                        *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 

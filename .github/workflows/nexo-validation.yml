@@ -69,11 +69,20 @@ jobs:
 
           checks.append(("cruise",
               'ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1' in carstate and
-              "self.nexo_cruise_enabled" not in carstate))
+              'ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0 and nexo_controls_ready' in carstate and
+              "self.nexo_cruise_enabled" not in carstate and
+              "self.nexo_cruise_available" not in carstate))
 
           checks.append(("cruise readiness",
               "NEXO_CONTROLS_READY_FRAMES = 200" in carstate and
               'get_bool("ControlsReady")' in carstate))
+
+          controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
+          checks.append(("vehicle-confirmed SCC activation",
+              "acc_enabled = acc_enabled and CS.out.cruiseState.enabled" in controller))
+
+          checks.append(("NEXO MAIN passthrough",
+              "main_button_events = []" in carstate))
 
           checks.append(("NEXO radar 20 Hz",
               "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))
