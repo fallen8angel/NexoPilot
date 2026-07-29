@@ -157,13 +157,9 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   # message is unavailable. NEXO treats that status as a system fault, so keep
   # the cluster-facing FCA/AEB state normal. This does not claim openpilot AEB;
   # openpilot longitudinal still owns only ACC acceleration and braking.
-  if not use_fca:
-    if is_nexo:
-      scc12_values["CF_VSM_ConfMode"] = 0
-      scc12_values["AEB_Status"] = 0
-    else:
-      scc12_values["CF_VSM_ConfMode"] = 1
-      scc12_values["AEB_Status"] = 1  # AEB disabled
+  if not use_fca and not is_nexo:
+    scc12_values["CF_VSM_ConfMode"] = 1
+    scc12_values["AEB_Status"] = 1  # AEB disabled
 
   scc12_dat = packer.make_can_msg("SCC12", 0, scc12_values)[1]
   scc12_values["CR_VSM_ChkSum"] = 0x10 - sum(sum(divmod(i, 16)) for i in scc12_dat) % 0x10
@@ -216,7 +212,7 @@ def create_acc_opt(packer, CP):
     fca12_values = {
       "FCA_DrvSetState": 2,
       # 1 explicitly advertises AEB disabled and lights the NEXO FCA warning.
-      "FCA_USM": 2 if is_nexo else 1,
+      "FCA_USM": 0 if is_nexo else 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
