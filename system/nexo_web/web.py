@@ -266,6 +266,82 @@ def tmux_output() -> str:
   return "\n\n".join(blocks) or "tmux 출력 없음"
 
 
+def live_vehicle_output() -> str:
+  lines = []
+  try:
+    sock = messaging.sub_sock("carState", conflate=True, timeout=1200)
+    message = messaging.recv_one(sock)
+    if message is None:
+      return "carState 수신 없음"
+    state = message.carState
+    lines.extend([
+      f"속도: {state.vEgo * 3.6:.1f} km/h",
+      f"기어: {state.gearShifter}",
+      f"브레이크: {state.brakePressed}",
+      f"가속페달: {state.gasPressed}",
+      f"크루즈 사용 가능: {state.cruiseState.available}",
+      f"크루즈 활성: {state.cruiseState.enabled}",
+      f"크루즈 속도: {state.cruiseState.speed * 3.6:.1f} km/h",
+    ])
+  except Exception as error:
+    lines.append(f"carState 읽기 실패: {error}")
+
+  try:
+    sock = messaging.sub_sock("controlsState", conflate=True, timeout=1200)
+    message = messaging.recv_one(sock)
+    if message is not None:
+      state = message.controlsState
+      lines.extend([
+        f"controlsd 상태: {state.state}",
+        f"활성 경고: {state.alertText1} {state.alertText2}".strip(),
+      ])
+  except Exception as error:
+    lines.append(f"controlsState 읽기 실패: {error}")
+  return "\n".join(lines) or "차량 상태 수신 없음"
+
+
+def raw_can_diagnostic_output() -> str:
+  watched = {
+    0x389: "SCC14", 0x38D: "FCA11", 0x420: "SCC11", 0x421: "SCC12",
+    0x483: "FCA12", 0x4A2: "FRT_RADAR11", 0x50A: "SCC13",
+  }
+  counts = {}
+  latest = {}
+  track_counts = {}
+  try:
+    sock = messaging.sub_sock("can", timeout=300)
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+      event = messaging.recv_one(sock)
+      if event is None:
+        continue
+      for frame in event.can:
+        address = int(frame.address)
+        bus = int(frame.src)
+        key = (bus, address)
+        if address in watched:
+          counts[key] = counts.get(key, 0) + 1
+          latest[key] = bytes(frame.dat).hex(" ")
+        elif 0x500 <= address <= 0x51F:
+          track_counts[bus] = track_counts.get(bus, 0) + 1
+          latest[key] = bytes(frame.dat).hex(" ")
+  except Exception as error:
+    return f"CAN 수집 실패: {error}"
+
+  lines = ["1.5초 실측 CAN 수신 결과"]
+  for (bus, address), count in sorted(counts.items()):
+    lines.append(f"bus {bus} {watched[address]} 0x{address:03X}: {count}회 | {latest[(bus, address)]}")
+  if track_counts:
+    for bus, count in sorted(track_counts.items()):
+      track_ids = sorted(address for (src, address) in latest if src == bus and 0x500 <= address <= 0x51F)
+      lines.append(f"bus {bus} RADAR 0x500~0x51F: {count}회 | 고유 ID {len(track_ids)}개")
+  else:
+    lines.append("RADAR 0x500~0x51F: 수신 없음")
+  if len(lines) == 2 and not counts:
+    lines.append("SCC/FCA 감시 메시지 수신 없음")
+  return "\n".join(lines)
+
+
 def radar_diagnostic_output() -> str:
   _, output = run_command([
     "bash", "-lc",
@@ -399,33 +475,10 @@ def diagnostic_page(message: str = "") -> str:
   status = car_status()
   msg = f'<div class="message">{html.escape(message)}</div>' if message else ""
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>진단 도구</h1>{msg}<div class="card"><div class="row"><span>차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div><div class="row"><span>레이더 모드</span><span class="value">자동 활성화</span></div></div><div class="card">
-<h2>NEXO 상세 진단</h2>
-<pre>
-차량 상태
-- 속도 : 확인 중
-- 기어 : 확인 중
-- 브레이크 : 확인 중
-- 가속 : 확인 중
-- 조향 : 확인 중
-
-롱컨 상태
-- ACC Enable : 확인 중
-- MainMode_ACC : 확인 중
-- ACCMode : 확인 중
-
-조향 상태
-- 목표 조향각
-- 현재 조향각
-- 토크 보정
-
-버튼 로그
-- MODE
-- SET
-- RES
-- CANCEL
-</pre>
+<h2>NEXO 실시간 차량 상태</h2><pre>{html.escape(live_vehicle_output())}</pre>
 </div>
-<div class="card"><h2>레이더·FCA 핵심 로그</h2><pre>{html.escape(radar_diagnostic_output())}</pre></div><div class="card"><h2>tmux 로그</h2><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><pre>{html.escape(system_output())}</pre></div></main></body></html>'''
+<div class="card"><h2>SCC·FCA·레이더 실제 CAN</h2><pre>{html.escape(raw_can_diagnostic_output())}</pre></div>
+<div class="card"><h2>레이더·FCA 프로그램 로그</h2><pre>{html.escape(radar_diagnostic_output())}</pre></div><div class="card"><h2>tmux 로그</h2><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><pre>{html.escape(system_output())}</pre></div></main></body></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
