@@ -1,3 +1,5 @@
+import time
+
 from opendbc.car import Bus, get_safety_config, structs, uds
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -15,6 +17,23 @@ Ecu = structs.CarParams.Ecu
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
+NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x38D, 0x420, 0x421, 0x483, 0x4A2, 0x50A))
+
+
+def nexo_stock_scc_is_silent(can_recv, bus: int, quiet_time: float = 0.35, timeout: float = 1.5) -> bool:
+  """Confirm the stock SCC ECU actually stopped transmitting before enabling Panda long safety."""
+  start = time.monotonic()
+  last_scc = start
+
+  while time.monotonic() - start < timeout:
+    for packet in can_recv(wait_for_one=True):
+      if any(msg.src == bus and msg.address in NEXO_STOCK_SCC_ADDRS for msg in packet):
+        last_scc = time.monotonic()
+
+    if time.monotonic() - last_scc >= quiet_time:
+      return True
+
+  return False
 
 
 class CarInterface(CarInterfaceBase):
@@ -189,8 +208,19 @@ class CarInterface(CarInterfaceBase):
         # SCC/FCA frame even with the correct LONG safety parameter.
         if not enable_radar_tracks(can_recv, can_send, bus, retries=20):
           raise RuntimeError("NEXO radar track activation failed; stock SCC left enabled")
-        if not disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control):
-          raise RuntimeError("NEXO stock SCC communication could not be disabled")
+
+        stock_scc_silent = False
+        for attempt in range(1, 4):
+          disable_sent = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
+                                     com_cont_req=communication_control, timeout=0.2, retry=10)
+          if disable_sent and nexo_stock_scc_is_silent(can_recv, bus):
+            carlog.info(f"NEXO stock SCC silence verified on bus {bus}, attempt {attempt}")
+            stock_scc_silent = True
+            break
+          carlog.warning(f"NEXO stock SCC still active on bus {bus}, disable attempt {attempt}/3")
+
+        if not stock_scc_silent:
+          raise RuntimeError("NEXO stock SCC remained active; longitudinal control not started")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
