@@ -78,8 +78,11 @@ jobs:
               'get_bool("ControlsReady")' in carstate))
 
           controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
-          checks.append(("vehicle-confirmed SCC activation",
-              "acc_enabled = acc_enabled and CS.out.cruiseState.enabled" in controller))
+          hyundaican = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
+          checks.append(("NEXOdriveAI SCC activation sequence",
+              "CS.out.cruiseState.available, CS.out.cruiseState.enabled" in controller and
+              "vehicle_cruise_enabled if is_nexo else main_mode_acc" in hyundaican and
+              "scc14_enabled = enabled if is_nexo else acc_enabled" in hyundaican))
 
           checks.append(("NEXO MAIN passthrough",
               "main_button_events = []" in carstate))
