@@ -1,10 +1,12 @@
 from hypothesis import settings, given, strategies as st
 
 import unittest
+from types import SimpleNamespace
 
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
+from opendbc.car.hyundai import hyundaican
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
@@ -41,6 +43,42 @@ NO_DATES_PLATFORMS = {
 }
 
 CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
+
+
+class TestNexoHud(unittest.TestCase):
+  class RecordingPacker:
+    def make_can_msg(self, name, bus, values):
+      self.values = values.copy()
+      return 0, bytes(8), bus
+
+  def test_lkas11_uses_active_hud_colors(self):
+    original = {
+      "CF_Lkas_LdwsActivemode": 0,
+      "CF_Lkas_LdwsSysState": 0,
+      "CF_Lkas_SysWarning": 0,
+      "CF_Lkas_LdwsLHWarning": 0,
+      "CF_Lkas_LdwsRHWarning": 0,
+      "CF_Lkas_HbaLamp": 0,
+      "CF_Lkas_FcwBasReq": 0,
+      "CF_Lkas_HbaSysState": 0,
+      "CF_Lkas_FcwOpt": 0,
+      "CF_Lkas_HbaOpt": 0,
+      "CF_Lkas_FcwSysState": 0,
+      "CF_Lkas_FcwCollisionWarning": 0,
+      "CF_Lkas_FusionState": 0,
+      "CF_Lkas_FcwOpt_USM": 4,
+      "CF_Lkas_LdwsOpt_USM": 0,
+    }
+    CP = SimpleNamespace(carFingerprint=CAR.HYUNDAI_NEXO_1ST_GEN, flags=0)
+
+    for enabled, expected_color in ((False, 1), (True, 2)):
+      with self.subTest(enabled=enabled):
+        packer = self.RecordingPacker()
+        hyundaican.create_lkas11(packer, 0, CP, 0, False, False, original, False, 3, enabled,
+                                 True, True, False, False)
+        assert packer.values["CF_Lkas_FcwOpt_USM"] == expected_color
+        assert packer.values["CF_Lkas_LdwsOpt_USM"] == 2
+        assert packer.values["CF_Lkas_LdwsActivemode"] == 3
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
