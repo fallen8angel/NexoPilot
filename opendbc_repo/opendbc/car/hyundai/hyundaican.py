@@ -153,11 +153,17 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   }
 
-  # show AEB disabled indicator on dash with SCC12 if not sending FCA messages.
-  # these signals also prevent a TCS fault on non-FCA cars with alpha longitudinal
+  # Generic Hyundai longitudinal uses the disabled status when the stock FCA
+  # message is unavailable. NEXO treats that status as a system fault, so keep
+  # the cluster-facing FCA/AEB state normal. This does not claim openpilot AEB;
+  # openpilot longitudinal still owns only ACC acceleration and braking.
   if not use_fca:
-    scc12_values["CF_VSM_ConfMode"] = 1
-    scc12_values["AEB_Status"] = 1  # AEB disabled
+    if is_nexo:
+      scc12_values["CF_VSM_ConfMode"] = 0
+      scc12_values["AEB_Status"] = 0
+    else:
+      scc12_values["CF_VSM_ConfMode"] = 1
+      scc12_values["AEB_Status"] = 1  # AEB disabled
 
   scc12_dat = packer.make_can_msg("SCC12", 0, scc12_values)[1]
   scc12_values["CR_VSM_ChkSum"] = 0x10 - sum(sum(divmod(i, 16)) for i in scc12_dat) % 0x10
@@ -183,7 +189,8 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 1,  # AEB disabled
+      # NEXO faults the FCA cluster when this is advertised as disabled.
+      "FCA_Status": 0 if is_nexo else 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
@@ -205,9 +212,11 @@ def create_acc_opt(packer, CP):
   # TODO: this needs to be detected and conditionally sent on unsupported long cars
   # On Camera SCC cars, FCA12 is not disabled, so we forward stock FCA12 back to the car forward hooks
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
+    is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 1, # AEB disabled
+      # 1 explicitly advertises AEB disabled and lights the NEXO FCA warning.
+      "FCA_USM": 2 if is_nexo else 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
