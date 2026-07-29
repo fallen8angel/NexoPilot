@@ -17,7 +17,6 @@ DESCRIPTIONS = {
     "Use the openpilot system for adaptive cruise control and lane keep driver assistance. " +
     "Your attention is required at all times to use this feature."
   ),
-  "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage openpilot."),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, openpilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode openpilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -52,12 +51,6 @@ class TogglesLayout(Widget):
         lambda: tr("Experimental Mode"),
         "",
         "experimental_white.png",
-        False,
-      ),
-      "DisengageOnAccelerator": (
-        lambda: tr("Disengage on Accelerator Pedal"),
-        DESCRIPTIONS["DisengageOnAccelerator"],
-        "disengage_on_accelerator.png",
         False,
       ),
       "IsLdwEnabled": (
@@ -131,8 +124,8 @@ class TogglesLayout(Widget):
 
       self._toggles[param] = toggle
 
-      # insert longitudinal personality after NDOG toggle
-      if param == "DisengageOnAccelerator":
+      # Keep driving personality near the primary driving-mode controls.
+      if param == "ExperimentalMode":
         self._toggles["LongitudinalPersonality"] = self._long_personality_setting
 
     self._update_experimental_mode_icon()
