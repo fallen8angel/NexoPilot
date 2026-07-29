@@ -116,7 +116,13 @@ class CarInterface(CarInterfaceBase):
     else:
       ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or not radar_dbc_available
 
-    ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
+    is_nexo = candidate == CAR.HYUNDAI_NEXO_1ST_GEN
+    # NEXO uses the proven NEXOdriveAI longitudinal path. Keep CarParams and
+    # Panda safety configuration in lockstep instead of allowing a stale
+    # AlphaLongitudinalEnabled value to leave the controller producing SCC
+    # frames while Panda is still in lateral-only Hyundai safety mode.
+    ret.openpilotLongitudinalControl = ret.alphaLongitudinalAvailable if is_nexo else \
+                                      alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
     ret.startingState = True
     ret.vEgoStarting = 0.1
@@ -124,7 +130,7 @@ class CarInterface(CarInterfaceBase):
     ret.longitudinalActuatorDelay = 0.5
 
     # NEXOdriveAI longitudinal tuning and stop/start behavior.
-    if candidate == CAR.HYUNDAI_NEXO_1ST_GEN:
+    if is_nexo:
       ret.longitudinalTuning.kpBP = [0., 5. * CV.KPH_TO_MS, 10. * CV.KPH_TO_MS,
                                     30. * CV.KPH_TO_MS, 130. * CV.KPH_TO_MS]
       ret.longitudinalTuning.kpV = [1.2, 1.05, 1.0, 0.92, 0.55]
@@ -145,6 +151,11 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.EV_GAS.value
     elif ret.flags & HyundaiFlags.FCEV:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.FCEV_GAS.value
+
+    if is_nexo:
+      nexo_safety_param = HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS
+      ret.safetyConfigs[-1].safetyParam |= nexo_safety_param.value
+      assert (ret.safetyConfigs[-1].safetyParam & nexo_safety_param.value) == nexo_safety_param.value
 
     if candidate == CAR.KIA_OPTIMA_G4_FL:
       ret.steerActuatorDelay = 0.2

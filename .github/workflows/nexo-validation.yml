@@ -99,6 +99,12 @@ jobs:
               'return "안전 차단", source - 192' in web and
               'sub_sock("controlsState"' not in web))
 
+          interface = Path("opendbc_repo/opendbc/car/hyundai/interface.py").read_text()
+          checks.append(("NEXO Panda longitudinal safety lockstep",
+              "ret.alphaLongitudinalAvailable if is_nexo" in interface and
+              "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" in interface and
+              "ret.safetyConfigs[-1].safetyParam |= nexo_safety_param.value" in interface))
+
           checks.append(("apply removed",
               "apply_nexo_ai.py" not in launch))
 
