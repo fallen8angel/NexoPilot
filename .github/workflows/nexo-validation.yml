@@ -29,6 +29,7 @@ jobs:
           python -m py_compile \
             opendbc_repo/opendbc/car/hyundai/values.py \
             opendbc_repo/opendbc/car/hyundai/carstate.py \
+            opendbc_repo/opendbc/car/hyundai/radar_interface.py \
             system/nexo_web/web.py
 
       - name: Check NEXO integration
@@ -50,6 +51,7 @@ jobs:
 
           values = read("opendbc_repo/opendbc/car/hyundai/values.py")
           carstate = read("opendbc_repo/opendbc/car/hyundai/carstate.py")
+          radar = read("opendbc_repo/opendbc/car/hyundai/radar_interface.py")
           launch = read("launch_openpilot.sh")
           web = read("system/nexo_web/web.py")
 
@@ -67,6 +69,14 @@ jobs:
 
           checks.append(("cruise",
               "self.nexo_cruise_enabled" in carstate))
+
+          checks.append(("NEXO radar 20 Hz",
+              "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))
+
+          checks.append(("current selfdrive diagnostics",
+              'sub_sock("selfdriveState"' in web and
+              'sub_sock("radarState"' in web and
+              'sub_sock("controlsState"' not in web))
 
           checks.append(("apply removed",
               "apply_nexo_ai.py" not in launch))

@@ -279,6 +279,7 @@ def live_vehicle_output() -> str:
       f"기어: {state.gearShifter}",
       f"브레이크: {state.brakePressed}",
       f"가속페달: {state.gasPressed}",
+      f"ACC 고장: {state.accFaulted}",
       f"크루즈 사용 가능: {state.cruiseState.available}",
       f"크루즈 활성: {state.cruiseState.enabled}",
       f"크루즈 속도: {state.cruiseState.speed * 3.6:.1f} km/h",
@@ -287,16 +288,29 @@ def live_vehicle_output() -> str:
     lines.append(f"carState 읽기 실패: {error}")
 
   try:
-    sock = messaging.sub_sock("controlsState", conflate=True, timeout=1200)
+    sock = messaging.sub_sock("selfdriveState", conflate=True, timeout=1200)
     message = messaging.recv_one(sock)
     if message is not None:
-      state = message.controlsState
+      state = message.selfdriveState
       lines.extend([
-        f"controlsd 상태: {state.state}",
+        f"주행 상태: {state.state}",
+        f"시스템 활성/제어 중: {state.enabled}/{state.active}",
         f"활성 경고: {state.alertText1} {state.alertText2}".strip(),
       ])
   except Exception as error:
-    lines.append(f"controlsState 읽기 실패: {error}")
+    lines.append(f"selfdriveState 읽기 실패: {error}")
+
+  try:
+    sock = messaging.sub_sock("radarState", conflate=True, timeout=1200)
+    message = messaging.recv_one(sock)
+    if message is not None:
+      errors = message.radarState.radarErrors
+      lines.append(
+        f"레이더 오류: CAN={errors.canError}, 장치={errors.radarFault}, "
+        f"설정={errors.wrongConfig}, 일시중지={errors.radarUnavailableTemporary}"
+      )
+  except Exception as error:
+    lines.append(f"radarState 읽기 실패: {error}")
   return "\n".join(lines) or "차량 상태 수신 없음"
 
 

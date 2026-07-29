@@ -3,7 +3,7 @@ import math
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import RadarInterfaceBase
-from opendbc.car.hyundai.values import DBC
+from opendbc.car.hyundai.values import CAR, DBC
 
 RADAR_START_ADDR = 0x500
 RADAR_MSG_COUNT = 32
@@ -15,7 +15,11 @@ def get_radar_can_parser(CP):
   if Bus.radar not in DBC[CP.carFingerprint]:
     return None
 
-  messages = [(f"RADAR_TRACK_{addr:x}", 50) for addr in range(RADAR_START_ADDR, RADAR_START_ADDR + RADAR_MSG_COUNT)]
+  # The first-generation NEXO radar emits each of its 32 tracks at 20 Hz.
+  # Declaring 50 Hz makes CANParser invalidate otherwise healthy radar data.
+  radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50
+  messages = [(f"RADAR_TRACK_{addr:x}", radar_frequency)
+              for addr in range(RADAR_START_ADDR, RADAR_START_ADDR + RADAR_MSG_COUNT)]
   return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, 1)
 
 
