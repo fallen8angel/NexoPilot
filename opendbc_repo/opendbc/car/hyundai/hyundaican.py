@@ -129,9 +129,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
                         cruise_available=True):
   commands = []
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
-  # The stock availability bit drops when the radar ECU is disabled for openpilot longitudinal.
-  # Keep SCC main mode advertised so NEXO does not enter a cruise-fault feedback loop.
-  main_mode_acc = True
+  main_mode_acc = cruise_available
   acc_enabled = enabled and main_mode_acc
 
   scc11_values = {
