@@ -93,6 +93,10 @@ jobs:
           checks.append(("current selfdrive diagnostics",
               'sub_sock("selfdriveState"' in web and
               'sub_sock("radarState"' in web and
+              'sub_sock("pandaStates"' in web and
+              "LONG(4)" in web and
+              "FCEV_GAS(256)" in web and
+              'return "안전 차단", source - 192' in web and
               'sub_sock("controlsState"' not in web))
 
           checks.append(("apply removed",

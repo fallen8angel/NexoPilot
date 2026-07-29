@@ -311,7 +311,36 @@ def live_vehicle_output() -> str:
       )
   except Exception as error:
     lines.append(f"radarState 읽기 실패: {error}")
+
+  try:
+    sock = messaging.sub_sock("pandaStates", conflate=True, timeout=1200)
+    message = messaging.recv_one(sock)
+    if message is not None and len(message.pandaStates) > 0:
+      panda = message.pandaStates[0]
+      safety_param = int(panda.safetyParam)
+      expected_param = 4 | 256
+      lines.extend([
+        "",
+        "[판다 안전 설정]",
+        f"안전 모델: {panda.safetyModel}",
+        f"안전 파라미터: {safety_param} (넥쏘 롱컨 예상값: {expected_param})",
+        f"롱컨 안전 허용 LONG(4): {bool(safety_param & 4)}",
+        f"넥쏘 FCEV 페달 FCEV_GAS(256): {bool(safety_param & 256)}",
+        f"안전 파라미터 정상: {(safety_param & expected_param) == expected_param}",
+        f"제어 허용: {panda.controlsAllowed}",
+        f"안전 RX 검사 오류: {panda.safetyRxChecksInvalid}",
+      ])
+  except Exception as error:
+    lines.append(f"pandaStates 읽기 실패: {error}")
   return "\n".join(lines) or "차량 상태 수신 없음"
+
+
+def can_source_info(source: int) -> tuple[str, int]:
+  if source >= 192:
+    return "안전 차단", source - 192
+  if source >= 128:
+    return "송신 성공", source - 128
+  return "차량 수신", source
 
 
 def raw_can_diagnostic_output() -> str:
@@ -342,16 +371,36 @@ def raw_can_diagnostic_output() -> str:
   except Exception as error:
     return f"CAN 수집 실패: {error}"
 
-  lines = ["1.5초 실측 CAN 수신 결과"]
+  status_totals = {"차량 수신": 0, "송신 성공": 0, "안전 차단": 0}
+  for (source, _), count in counts.items():
+    status, _ = can_source_info(source)
+    status_totals[status] += count
+
+  lines = [
+    "1.5초 실제 CAN 수집 결과",
+    (
+      f"SCC/FCA 합계: 차량 수신 {status_totals['차량 수신']}회 | "
+      f"송신 성공 {status_totals['송신 성공']}회 | 안전 차단 {status_totals['안전 차단']}회"
+    ),
+    "※ src 128~135는 송신 성공, src 192~199는 판다 안전 차단 표시입니다.",
+  ]
   for (bus, address), count in sorted(counts.items()):
-    lines.append(f"bus {bus} {watched[address]} 0x{address:03X}: {count}회 | {latest[(bus, address)]}")
+    status, physical_bus = can_source_info(bus)
+    lines.append(
+      f"{status} (물리 bus {physical_bus}, src {bus}) "
+      f"{watched[address]} 0x{address:03X}: {count}회 | {latest[(bus, address)]}"
+    )
   if track_counts:
     for bus, count in sorted(track_counts.items()):
       track_ids = sorted(address for (src, address) in latest if src == bus and 0x500 <= address <= 0x51F)
-      lines.append(f"bus {bus} RADAR 0x500~0x51F: {count}회 | 고유 ID {len(track_ids)}개")
+      status, physical_bus = can_source_info(bus)
+      lines.append(
+        f"{status} (물리 bus {physical_bus}, src {bus}) "
+        f"RADAR 0x500~0x51F: {count}회 | 고유 ID {len(track_ids)}개"
+      )
   else:
     lines.append("RADAR 0x500~0x51F: 수신 없음")
-  if len(lines) == 2 and not counts:
+  if not counts:
     lines.append("SCC/FCA 감시 메시지 수신 없음")
   return "\n".join(lines)
 
