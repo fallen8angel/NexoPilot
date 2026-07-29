@@ -68,7 +68,12 @@ jobs:
               "P=0, D=5, N=6, R=7" in carstate))
 
           checks.append(("cruise",
-              "self.nexo_cruise_enabled" in carstate))
+              'ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1' in carstate and
+              "self.nexo_cruise_enabled" not in carstate))
+
+          checks.append(("cruise readiness",
+              "NEXO_CONTROLS_READY_FRAMES = 200" in carstate and
+              'get_bool("ControlsReady")' in carstate))
 
           checks.append(("NEXO radar 20 Hz",
               "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))

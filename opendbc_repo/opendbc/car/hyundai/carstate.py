@@ -8,12 +8,14 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
+from openpilot.common.params import Params
 
 ButtonType = structs.CarState.ButtonEvent.Type
 
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 STANDSTILL_THRESHOLD = 12 * 0.03125
+NEXO_CONTROLS_READY_FRAMES = 200
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
@@ -64,10 +66,11 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # NEXO longitudinal cruise state. Stock SCC is disabled while openpilot
-    # longitudinal control is active, so button state must be tracked locally.
-    self.nexo_cruise_enabled = False
+    # Stock SCC is disabled for NEXO longitudinal control. Keep only the driver's
+    # MAIN selection locally; actual ACC engagement must be confirmed by TCS13.
     self.nexo_cruise_available = False
+    self.nexo_controls_ready_frames = 0
+    self.op_params = Params()
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -84,6 +87,13 @@ class CarState(CarStateBase):
 
     ret = structs.CarState()
     cp_cruise = cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC else cp
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
+      if self.op_params.get_bool("ControlsReady") and self.nexo_controls_ready_frames < NEXO_CONTROLS_READY_FRAMES:
+        self.nexo_controls_ready_frames += 1
+      nexo_controls_ready = self.nexo_controls_ready_frames >= NEXO_CONTROLS_READY_FRAMES
+    else:
+      nexo_controls_ready = True
+
     self.is_metric = cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"] == 0
     speed_conv = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
 
@@ -126,11 +136,12 @@ class CarState(CarStateBase):
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
-        # NEXOdriveAI proved that the NEXO must keep its own cruise main state
-        # after stock SCC communication is disabled. TCS13.ACCEnable is still
-        # used for fault reporting below, but not as the cruise button latch.
-        ret.cruiseState.available = self.nexo_cruise_available
-        ret.cruiseState.enabled = self.nexo_cruise_enabled
+        # Keep MAIN locally after disabling stock SCC, but only advertise it once
+        # card/controls have settled. Engagement is vehicle-confirmed: treating a
+        # SET/RES press itself as active can transmit SCC control before TCS/ESC
+        # accepts ACC and cause a latched ACCEnable fault.
+        ret.cruiseState.available = self.nexo_cruise_available and nexo_controls_ready
+        ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       else:
         ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
         ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
@@ -222,34 +233,22 @@ class CarState(CarStateBase):
 
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
       main_pressed = any(be.pressed and be.type == ButtonType.mainCruise for be in ret.buttonEvents)
-      enable_released = any(not be.pressed and be.type in (ButtonType.accelCruise, ButtonType.decelCruise)
-                            for be in ret.buttonEvents)
       cancel_pressed = any(be.pressed and be.type == ButtonType.cancel for be in ret.buttonEvents)
+      vehicle_acc_enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
 
-      # Match the button flow that was proven on NEXOdriveAI:
-      # MAIN toggles cruise availability, and SET/RES engages on release.
+      # MAIN controls standby availability. SET/RES is still delivered as a
+      # button event to selfdrived, but TCS13 must confirm actual engagement.
       if main_pressed:
         self.nexo_cruise_available = not self.nexo_cruise_available
-        if not self.nexo_cruise_available:
-          self.nexo_cruise_enabled = False
-
-      if enable_released and self.nexo_cruise_available:
-        self.nexo_cruise_enabled = True
 
       if cancel_pressed:
-        # First CANCEL exits enabled control. A second CANCEL while already
-        # disabled clears availability, matching the proven legacy flow.
-        if not self.nexo_cruise_enabled:
+        # First CANCEL exits active control. A second CANCEL while TCS13 already
+        # reports inactive clears MAIN availability.
+        if not vehicle_acc_enabled:
           self.nexo_cruise_available = False
-        self.nexo_cruise_enabled = False
 
-      # Keep openpilot's brake disengagement and panda's independent brake and
-      # CANCEL safety checks. Braking does not turn the cruise main state off.
-      if ret.brakePressed:
-        self.nexo_cruise_enabled = False
-
-      ret.cruiseState.available = self.nexo_cruise_available
-      ret.cruiseState.enabled = self.nexo_cruise_enabled
+      ret.cruiseState.available = self.nexo_cruise_available and nexo_controls_ready
+      ret.cruiseState.enabled = vehicle_acc_enabled
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 
