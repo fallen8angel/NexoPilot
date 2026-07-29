@@ -127,11 +127,16 @@ def create_lfahda_mfc(packer, enabled):
 
 
 def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, set_speed, stopping, long_override, use_fca, CP,
-                        cruise_available=True):
+                        cruise_available=True, vehicle_cruise_enabled=True):
   commands = []
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
   main_mode_acc = cruise_available
-  acc_enabled = enabled and main_mode_acc
+  # NEXOdriveAI's proven sequence deliberately treats SCC12 and SCC14
+  # differently: TCS13.ACC_REQ confirms SCC12 acceleration/braking, while
+  # SCC14 follows the openpilot enable request. Gating both messages on
+  # ACC_REQ creates a deadlock where the vehicle never grants ACC.
+  acc_enabled = enabled and (vehicle_cruise_enabled if is_nexo else main_mode_acc)
+  scc14_enabled = enabled if is_nexo else acc_enabled
 
   scc11_values = {
     "MainMode_ACC": main_mode_acc,
@@ -172,7 +177,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "ComfortBandLower": 0.0, # stock usually is 0 but sometimes uses higher values
     "JerkUpperLimit": upper_jerk, # stock usually is 1.0 but sometimes uses higher values
     "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
-    "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 4, # stock will always be 4 instead of 0 after first disengage
+    "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": 2 if hud_control.leadVisible else 0, # 5: >30, m, 4: 25-30 m, 3: 20-25 m, 2: < 20 m, 0: no lead
   }
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
