@@ -1145,6 +1145,8 @@ struct LateralManeuverPlan {
 struct LongitudinalPlan @0xe00b5b3eba12876c {
   modelMonoTime @9 :UInt64;
   hasLead @7 :Bool;
+  leadDistance @40 :Float32;
+  leadRelSpeed @41 :Float32;
   fcw @8 :Bool;
   longitudinalPlanSource @15 :LongitudinalPlanSource;
   processingDelay @29 :Float32;

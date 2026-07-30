@@ -8,14 +8,12 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
-from openpilot.common.params import Params
-
 ButtonType = structs.CarState.ButtonEvent.Type
 
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 STANDSTILL_THRESHOLD = 12 * 0.03125
-NEXO_CONTROLS_READY_FRAMES = 200
+NEXO_ACC_FAULT_DEBOUNCE_FRAMES = 100
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
@@ -66,10 +64,10 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # Stock SCC is disabled for NEXO longitudinal control. Actual availability
-    # and engagement are confirmed by TCS13 rather than a local MAIN latch.
-    self.nexo_controls_ready_frames = 0
-    self.op_params = Params()
+    # Stock SCC is disabled for NEXO longitudinal control. Ignore a short
+    # ACCEnable transition while SCC12/SCC14 take ownership, but preserve a
+    # persistent vehicle fault.
+    self.nexo_acc_fault_frames = 0
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -86,13 +84,6 @@ class CarState(CarStateBase):
 
     ret = structs.CarState()
     cp_cruise = cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC else cp
-    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
-      if self.op_params.get_bool("ControlsReady") and self.nexo_controls_ready_frames < NEXO_CONTROLS_READY_FRAMES:
-        self.nexo_controls_ready_frames += 1
-      nexo_controls_ready = self.nexo_controls_ready_frames >= NEXO_CONTROLS_READY_FRAMES
-    else:
-      nexo_controls_ready = True
-
     self.is_metric = cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"] == 0
     speed_conv = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
 
@@ -137,7 +128,7 @@ class CarState(CarStateBase):
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
         # Let the vehicle own its CRUISE/LIMIT selection. Mirroring MAIN with a
         # local latch can fight the cluster state and leave LIMIT stuck.
-        ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0 and nexo_controls_ready
+        ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
         ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       else:
         ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
@@ -158,7 +149,12 @@ class CarState(CarStateBase):
     ret.parkingBrake = cp.vl["TCS13"]["PBRAKE_ACT"] == 1
     ret.espDisabled = cp.vl["TCS11"]["TCS_PAS"] == 1
     ret.espActive = cp.vl["TCS11"]["ABS_ACT"] == 1
-    ret.accFaulted = cp.vl["TCS13"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
+    acc_faulted = cp.vl["TCS13"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
+      self.nexo_acc_fault_frames = min(self.nexo_acc_fault_frames + 1, NEXO_ACC_FAULT_DEBOUNCE_FRAMES) if acc_faulted else 0
+      ret.accFaulted = self.nexo_acc_fault_frames >= NEXO_ACC_FAULT_DEBOUNCE_FRAMES
+    else:
+      ret.accFaulted = acc_faulted
 
     if self.CP.flags & (HyundaiFlags.HYBRID | HyundaiFlags.EV | HyundaiFlags.FCEV):
       if self.CP.flags & HyundaiFlags.FCEV:

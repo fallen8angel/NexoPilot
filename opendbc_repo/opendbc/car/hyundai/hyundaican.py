@@ -131,23 +131,27 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   commands = []
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
   main_mode_acc = cruise_available
-  # NEXOdriveAI's proven sequence deliberately treats SCC12 and SCC14
-  # differently: TCS13.ACC_REQ confirms SCC12 acceleration/braking, while
-  # SCC14 follows the openpilot enable request. Gating both messages on
-  # ACC_REQ creates a deadlock where the vehicle never grants ACC.
-  acc_enabled = enabled and (vehicle_cruise_enabled if is_nexo else main_mode_acc)
-  scc14_enabled = enabled if is_nexo else acc_enabled
+  # ACC_REQ is vehicle feedback, not permission to start SCC12. Waiting for it
+  # creates a circular dependency: NEXO waits for SCC12 while openpilot waits
+  # for ACC_REQ. Keep SCC12 and SCC14 in the same requested state.
+  acc_enabled = enabled if is_nexo else enabled and main_mode_acc
+  scc14_enabled = acc_enabled
+
+  lead_visible = hud_control.leadVisible
+  lead_distance = max(0.0, min(float(hud_control.leadDistance), 204.7)) if lead_visible else 0.0
+  lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
+  obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
 
   scc11_values = {
     "MainMode_ACC": main_mode_acc,
     "TauGapSet": hud_control.leadDistanceBars,
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
-    "ObjValid": 1, # close lead makes controls tighter
-    "ACC_ObjStatus": 1, # close lead makes controls tighter
+    "ObjValid": 1 if lead_visible else 0,
+    "ACC_ObjStatus": 1 if lead_visible else 0,
     "ACC_ObjLatPos": 0,
-    "ACC_ObjRelSpd": 0,
-    "ACC_ObjDist": 1, # close lead makes controls tighter
+    "ACC_ObjRelSpd": lead_rel_speed,
+    "ACC_ObjDist": lead_distance,
     }
   commands.append(packer.make_can_msg("SCC11", 0, scc11_values))
 
@@ -178,7 +182,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "JerkUpperLimit": upper_jerk, # stock usually is 1.0 but sometimes uses higher values
     "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
-    "ObjGap": 2 if hud_control.leadVisible else 0, # 5: >30, m, 4: 25-30 m, 3: 20-25 m, 2: < 20 m, 0: no lead
+    "ObjGap": obj_gap, # 5: >70 m, 4: 40-70 m, 3: 25-40 m, 2: <25 m, 0: no lead
   }
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 

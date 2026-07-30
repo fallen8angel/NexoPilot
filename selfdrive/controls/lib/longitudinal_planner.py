@@ -180,7 +180,10 @@ class LongitudinalPlanner:
     longitudinalPlan.accels = self.a_desired_trajectory.tolist()
     longitudinalPlan.jerks = self.j_desired_trajectory.tolist()
 
-    longitudinalPlan.hasLead = sm['radarState'].leadOne.status
+    lead_one = sm['radarState'].leadOne
+    longitudinalPlan.hasLead = lead_one.status
+    longitudinalPlan.leadDistance = lead_one.dRel if lead_one.status else 0.0
+    longitudinalPlan.leadRelSpeed = lead_one.vRel if lead_one.status else 0.0
     longitudinalPlan.longitudinalPlanSource = self.mpc.source
     longitudinalPlan.fcw = self.fcw
 

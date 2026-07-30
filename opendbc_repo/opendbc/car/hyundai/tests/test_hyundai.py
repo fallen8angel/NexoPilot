@@ -81,6 +81,68 @@ class TestNexoHud(unittest.TestCase):
         assert packer.values["CF_Lkas_LdwsActivemode"] == 3
 
 
+class TestNexoLongitudinalCommands(unittest.TestCase):
+  class RecordingPacker:
+    def __init__(self):
+      self.messages = []
+
+    def make_can_msg(self, name, bus, values):
+      self.messages.append((name, values.copy()))
+      return 0, bytes(8), bus
+
+    def last(self, name):
+      return next(values for msg_name, values in reversed(self.messages) if msg_name == name)
+
+  def setUp(self):
+    self.CP = SimpleNamespace(carFingerprint=CAR.HYUNDAI_NEXO_1ST_GEN, flags=0)
+    self.hud = SimpleNamespace(
+      leadDistanceBars=3,
+      leadVisible=True,
+      leadDistance=42.5,
+      leadRelSpeed=-1.5,
+    )
+
+  def create_commands(self, enabled, vehicle_cruise_enabled=False, use_fca=False):
+    packer = self.RecordingPacker()
+    hyundaican.create_acc_commands(
+      packer, enabled, 0.2, 3.0, 1, self.hud, 80, False, False, use_fca, self.CP,
+      cruise_available=True, vehicle_cruise_enabled=vehicle_cruise_enabled,
+    )
+    return packer
+
+  def test_scc12_and_scc14_do_not_wait_for_acc_req(self):
+    packer = self.create_commands(enabled=True, vehicle_cruise_enabled=False)
+    assert packer.last("SCC12")["ACCMode"] == 1
+    assert packer.last("SCC14")["ACCMode"] == 1
+
+  def test_disabled_longitudinal_keeps_both_scc_modes_inactive(self):
+    packer = self.create_commands(enabled=False)
+    assert packer.last("SCC12")["ACCMode"] == 0
+    assert packer.last("SCC14")["ACCMode"] == 4
+
+  def test_real_lead_state_is_forwarded(self):
+    packer = self.create_commands(enabled=True)
+    scc11 = packer.last("SCC11")
+    assert scc11["ObjValid"] == 1
+    assert scc11["ACC_ObjStatus"] == 1
+    assert scc11["ACC_ObjDist"] == 42.5
+    assert scc11["ACC_ObjRelSpd"] == -1.5
+    assert packer.last("SCC14")["ObjGap"] == 4
+
+    self.hud.leadVisible = False
+    packer = self.create_commands(enabled=True)
+    scc11 = packer.last("SCC11")
+    assert scc11["ObjValid"] == 0
+    assert scc11["ACC_ObjStatus"] == 0
+    assert scc11["ACC_ObjDist"] == 0
+    assert scc11["ACC_ObjRelSpd"] == 0
+    assert packer.last("SCC14")["ObjGap"] == 0
+
+  def test_nexo_fca_status_matches_proven_ai_sequence(self):
+    packer = self.create_commands(enabled=True, use_fca=True)
+    assert packer.last("FCA11")["FCA_Status"] == 0
+
+
 class TestHyundaiFingerprint(unittest.TestCase):
   def test_feature_detection(self):
     # LKA steering

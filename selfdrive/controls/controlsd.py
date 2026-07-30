@@ -160,6 +160,8 @@ class Controls:
     hudControl.speedVisible = CC.enabled
     hudControl.lanesVisible = CC.enabled
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
+    hudControl.leadDistance = self.sm['longitudinalPlan'].leadDistance
+    hudControl.leadRelSpeed = self.sm['longitudinalPlan'].leadRelSpeed
     hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
