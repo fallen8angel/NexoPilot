@@ -1,3 +1,5 @@
+import copy
+
 from opendbc.car.crc import CRC8J1850, mk_crc8_fun
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
 
@@ -127,7 +129,7 @@ def create_lfahda_mfc(packer, enabled):
 
 
 def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, set_speed, stopping, long_override, use_fca, CP,
-                        cruise_available=True, vehicle_cruise_enabled=True):
+                        cruise_available=True, vehicle_cruise_enabled=True, stock_scc11=None, stock_scc12=None, stock_scc14=None):
   commands = []
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
   main_mode_acc = cruise_available
@@ -142,7 +144,11 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
 
-  scc11_values = {
+  # NEXO and the older Santa Fe generation share a stock-message-preserving
+  # longitudinal pattern. Keep NEXO's unknown/platform-specific SCC bits and
+  # only replace the fields that openpilot owns.
+  scc11_values = copy.copy(stock_scc11) if is_nexo and stock_scc11 else {}
+  scc11_values.update({
     "MainMode_ACC": main_mode_acc,
     "TauGapSet": hud_control.leadDistanceBars,
     "VSetDis": set_speed if acc_enabled else 0,
@@ -152,16 +158,20 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "ACC_ObjLatPos": 0,
     "ACC_ObjRelSpd": lead_rel_speed,
     "ACC_ObjDist": lead_distance,
-    }
+  })
   commands.append(packer.make_can_msg("SCC11", 0, scc11_values))
 
-  scc12_values = {
+  scc12_values = copy.copy(stock_scc12) if is_nexo and stock_scc12 else {}
+  scc12_values.update({
     "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0,
     "StopReq": 1 if acc_enabled and stopping else 0,
     "aReqRaw": accel,
     "aReqValue": accel,  # stock ramps up and down respecting jerk limit until it reaches aReqRaw
+    "ACCFailInfo": 0,
+    "TakeOverReq": 0,
+    "CR_VSM_ChkSum": 0,
     "CR_VSM_Alive": idx % 0xF,
-  }
+  })
 
   # Generic Hyundai longitudinal uses the disabled status when the stock FCA
   # message is unavailable. NEXO treats that status as a system fault, so keep
@@ -176,14 +186,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
   commands.append(packer.make_can_msg("SCC12", 0, scc12_values))
 
-  scc14_values = {
+  scc14_values = copy.copy(stock_scc14) if is_nexo and stock_scc14 else {}
+  scc14_values.update({
     "ComfortBandUpper": 0.0, # stock usually is 0 but sometimes uses higher values
     "ComfortBandLower": 0.0, # stock usually is 0 but sometimes uses higher values
     "JerkUpperLimit": upper_jerk, # stock usually is 1.0 but sometimes uses higher values
     "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": obj_gap, # 5: >70 m, 4: 40-70 m, 3: 25-40 m, 2: <25 m, 0: no lead
-  }
+  })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
   # Only send FCA11 on cars where it exists on the bus

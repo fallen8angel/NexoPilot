@@ -102,11 +102,13 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
       leadRelSpeed=-1.5,
     )
 
-  def create_commands(self, enabled, vehicle_cruise_enabled=False, use_fca=False):
+  def create_commands(self, enabled, vehicle_cruise_enabled=False, use_fca=False,
+                      stock_scc11=None, stock_scc12=None, stock_scc14=None):
     packer = self.RecordingPacker()
     hyundaican.create_acc_commands(
       packer, enabled, 0.2, 3.0, 1, self.hud, 80, False, False, use_fca, self.CP,
       cruise_available=True, vehicle_cruise_enabled=vehicle_cruise_enabled,
+      stock_scc11=stock_scc11, stock_scc12=stock_scc12, stock_scc14=stock_scc14,
     )
     return packer
 
@@ -137,6 +139,20 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
     assert scc11["ACC_ObjDist"] == 0
     assert scc11["ACC_ObjRelSpd"] == 0
     assert packer.last("SCC14")["ObjGap"] == 0
+
+  def test_nexo_preserves_stock_scc_fields(self):
+    packer = self.create_commands(
+      enabled=True,
+      stock_scc11={"SCCInfoDisplay": 4},
+      stock_scc12={"CF_VSM_Warn": 0},
+      stock_scc14={"ObjDistStat": 3},
+    )
+    assert packer.last("SCC11")["SCCInfoDisplay"] == 4
+    assert packer.last("SCC12")["CF_VSM_Warn"] == 0
+    assert packer.last("SCC14")["ObjDistStat"] == 3
+    assert packer.last("SCC12")["ACCMode"] == 1
+    assert packer.last("SCC12")["ACCFailInfo"] == 0
+    assert packer.last("SCC12")["TakeOverReq"] == 0
 
   def test_nexo_fca_status_matches_proven_ai_sequence(self):
     packer = self.create_commands(enabled=True, use_fca=True)

@@ -96,6 +96,15 @@ jobs:
               "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
               "scc14_enabled = acc_enabled" in hyundaican))
 
+          checks.append(("NEXO stock SCC payload preservation",
+              'self.scc11 = copy.copy(cp_cruise.vl["SCC11"])' in carstate and
+              'self.scc12 = copy.copy(cp_cruise.vl["SCC12"])' in carstate and
+              'self.scc14 = copy.copy(cp_cruise.vl["SCC14"])' in carstate and
+              "CS.scc11, CS.scc12, CS.scc14" in controller and
+              "copy.copy(stock_scc11) if is_nexo and stock_scc11 else {}" in hyundaican and
+              "copy.copy(stock_scc12) if is_nexo and stock_scc12 else {}" in hyundaican and
+              "copy.copy(stock_scc14) if is_nexo and stock_scc14 else {}" in hyundaican))
+
           planner = read("selfdrive/controls/lib/longitudinal_planner.py")
           controls = read("selfdrive/controls/controlsd.py")
           log_schema = read("cereal/log.capnp")

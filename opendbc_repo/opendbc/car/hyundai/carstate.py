@@ -68,6 +68,12 @@ class CarState(CarStateBase):
     # ACCEnable transition while SCC12/SCC14 take ownership, but preserve a
     # persistent vehicle fault.
     self.nexo_acc_fault_frames = 0
+    # Preserve the last stock SCC payload for NEXO. Its SCC messages contain
+    # platform-specific status bits that are safer to retain than to recreate
+    # from a mostly-empty dictionary after disabling the stock SCC ECU.
+    self.scc11 = {}
+    self.scc12 = {}
+    self.scc14 = {}
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -211,6 +217,10 @@ class CarState(CarStateBase):
     # save the entire LKAS11 and CLU11
     self.lkas11 = copy.copy(cp_cam.vl["LKAS11"])
     self.clu11 = copy.copy(cp.vl["CLU11"])
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      self.scc11 = copy.copy(cp_cruise.vl["SCC11"])
+      self.scc12 = copy.copy(cp_cruise.vl["SCC12"])
+      self.scc14 = copy.copy(cp_cruise.vl["SCC14"])
     self.steer_state = cp.vl["MDPS12"]["CF_Mdps_ToiActive"]  # 0 NOT ACTIVE, 1 ACTIVE
     prev_cruise_buttons = self.cruise_buttons[-1]
     prev_main_buttons = self.main_buttons[-1]
