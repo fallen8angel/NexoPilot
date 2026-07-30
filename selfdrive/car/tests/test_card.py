@@ -6,9 +6,13 @@ from openpilot.selfdrive.car.card import recover_nexo_stock_cruise
 class FakeParams:
   def __init__(self):
     self.values = {}
+    self.removed = []
 
   def put_bool(self, key, value, block=False):
     self.values[key] = value
+
+  def remove(self, key):
+    self.removed.append(key)
 
 
 class TestNexoStockCruiseRecovery(unittest.TestCase):
@@ -23,6 +27,8 @@ class TestNexoStockCruiseRecovery(unittest.TestCase):
     self.assertTrue(recovered)
     self.assertFalse(params.values["AlphaLongitudinalEnabled"])
     self.assertFalse(params.values["ExperimentalMode"])
+    self.assertTrue(params.values["DoReboot"])
+    self.assertEqual(["CarParams", "CarParamsCache", "CarParamsPersistent"], params.removed)
 
   def test_does_not_change_other_failures_or_cars(self):
     for fingerprint, error in (
@@ -33,6 +39,7 @@ class TestNexoStockCruiseRecovery(unittest.TestCase):
         params = FakeParams()
         self.assertFalse(recover_nexo_stock_cruise(params, fingerprint, error))
         self.assertEqual({}, params.values)
+        self.assertEqual([], params.removed)
 
 
 if __name__ == "__main__":

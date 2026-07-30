@@ -55,7 +55,12 @@ def recover_nexo_stock_cruise(params: Params, car_fingerprint: str, error: Excep
 
   params.put_bool("AlphaLongitudinalEnabled", False, block=True)
   params.put_bool("ExperimentalMode", False, block=True)
-  cloudlog.error(f"NEXO longitudinal setup failed; restoring stock cruise on restart: {reason}")
+  # Do not reuse CarParams that were built with longitudinal control enabled.
+  # A full manager reboot makes pandad and card both restart in stock SCC mode.
+  for key in ("CarParams", "CarParamsCache", "CarParamsPersistent"):
+    params.remove(key)
+  params.put_bool("DoReboot", True, block=True)
+  cloudlog.error(f"NEXO longitudinal setup failed; rebooting into stock cruise: {reason}")
   return True
 
 

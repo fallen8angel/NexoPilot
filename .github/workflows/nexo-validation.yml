@@ -96,6 +96,8 @@ jobs:
           checks.append(("NEXO stock cruise recovery",
               'params.put_bool("AlphaLongitudinalEnabled", False, block=True)' in card and
               'params.put_bool("ExperimentalMode", False, block=True)' in card and
+              'params.put_bool("DoReboot", True, block=True)' in card and
+              '"CarParamsCache"' in card and
               "recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)" in card))
 
           checks.append(("current selfdrive diagnostics",
