@@ -151,8 +151,9 @@ jobs:
               interface.index("disabled = disable_ecu") <
               interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) and
               "nexo_stock_scc_is_silent" not in interface and
-              "raise RuntimeError(\"NEXO" not in interface and
-              "retries=1" in interface))
+              'raise RuntimeError("NEXO stock SCC communication could not be disabled")' in interface and
+              'raise RuntimeError("NEXO radar track activation failed")' in interface and
+              "retries=3" in interface))
 
           checks.append(("apply removed",
               "apply_nexo_ai.py" not in launch))

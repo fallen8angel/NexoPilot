@@ -176,16 +176,23 @@ class CarInterface(CarInterfaceBase):
 
       if is_nexo and disabling_normal_comms:
         # Match the proven Carrot NEXO sequence: stop stock SCC first, then
-        # enable radar point output. Do not terminate card if either diagnostic
-        # request is not acknowledged; Carrot keeps the interface alive and
-        # lets Panda/controls report the actual vehicle state.
+        # enable radar point output. Never continue in the half-initialized
+        # state: sending openpilot SCC while the stock SCC is still active (or
+        # after it was silenced without radar tracks) faults the vehicle.
         disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
                                com_cont_req=communication_control)
-        tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=1)
         if not disabled:
-          carlog.warning(f"NEXO stock SCC communication-control was not acknowledged on bus {bus}")
+          raise RuntimeError("NEXO stock SCC communication could not be disabled")
+
+        tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=3)
         if not tracks_enabled:
-          carlog.warning(f"NEXO radar track activation was not acknowledged on bus {bus}")
+          # Restore the stock radar/SCC transmitter before card's recovery
+          # disables long control and reboots into the normal cruise path.
+          enable_communication = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
+                                        0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
+                                        uds.MESSAGE_TYPE.NORMAL])
+          disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=enable_communication)
+          raise RuntimeError("NEXO radar track activation failed")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 

@@ -31,10 +31,27 @@ class TestNexoLongitudinalInit(unittest.TestCase):
 
     self.assertEqual(["disable", "enable"], calls)
 
-  def test_diagnostic_failure_does_not_stop_card(self):
+  def test_stock_scc_disable_failure_stops_long_init(self):
     with patch("opendbc.car.hyundai.interface.disable_ecu", return_value=False), \
          patch("opendbc.car.hyundai.interface.enable_radar_tracks", return_value=False):
-      CarInterface.init(self.CP, object(), object())
+      with self.assertRaisesRegex(RuntimeError, "stock SCC communication"):
+        CarInterface.init(self.CP, object(), object())
+
+  def test_radar_failure_restores_stock_scc_before_stopping_long_init(self):
+    calls = []
+
+    def disable(*args, **kwargs):
+      calls.append(kwargs["com_cont_req"])
+      return True
+
+    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=disable), \
+         patch("opendbc.car.hyundai.interface.enable_radar_tracks", return_value=False) as enable:
+      with self.assertRaisesRegex(RuntimeError, "radar track activation"):
+        CarInterface.init(self.CP, object(), object())
+
+    self.assertEqual(3, enable.call_args.kwargs["retries"])
+    self.assertEqual(b"\x28\x83\x01", calls[0])
+    self.assertEqual(b"\x28\x80\x01", calls[1])
 
   def test_stock_cruise_does_not_touch_radar(self):
     self.CP.openpilotLongitudinalControl = False
