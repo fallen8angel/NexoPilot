@@ -29,11 +29,15 @@ jobs:
           python -m py_compile \
             opendbc_repo/opendbc/car/hyundai/values.py \
             opendbc_repo/opendbc/car/hyundai/carstate.py \
+            opendbc_repo/opendbc/car/hyundai/carcontroller.py \
+            opendbc_repo/opendbc/car/hyundai/hyundaican.py \
             opendbc_repo/opendbc/car/hyundai/interface.py \
             opendbc_repo/opendbc/car/hyundai/radar_interface.py \
             opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py \
             selfdrive/car/card.py \
             selfdrive/car/tests/test_card.py \
+            selfdrive/controls/controlsd.py \
+            selfdrive/controls/lib/longitudinal_planner.py \
             system/nexo_web/web.py
 
       - name: Check NEXO integration
@@ -74,20 +78,37 @@ jobs:
 
           checks.append(("cruise",
               'ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1' in carstate and
-              'ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0 and nexo_controls_ready' in carstate and
+              'ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0' in carstate and
               "self.nexo_cruise_enabled" not in carstate and
-              "self.nexo_cruise_available" not in carstate))
+              "self.nexo_cruise_available" not in carstate and
+              "NEXO_CONTROLS_READY_FRAMES" not in carstate and
+              'get_bool("ControlsReady")' not in carstate))
 
-          checks.append(("cruise readiness",
-              "NEXO_CONTROLS_READY_FRAMES = 200" in carstate and
-              'get_bool("ControlsReady")' in carstate))
+          checks.append(("NEXO ACC fault debounce",
+              "NEXO_ACC_FAULT_DEBOUNCE_FRAMES = 100" in carstate and
+              "self.nexo_acc_fault_frames" in carstate and
+              "ret.accFaulted = self.nexo_acc_fault_frames >= NEXO_ACC_FAULT_DEBOUNCE_FRAMES" in carstate))
 
           controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
           hyundaican = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
-          checks.append(("NEXOdriveAI SCC activation sequence",
+          checks.append(("NEXO SCC activation sequence",
               "CS.out.cruiseState.available, CS.out.cruiseState.enabled" in controller and
-              "vehicle_cruise_enabled if is_nexo else main_mode_acc" in hyundaican and
-              "scc14_enabled = enabled if is_nexo else acc_enabled" in hyundaican))
+              "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
+              "scc14_enabled = acc_enabled" in hyundaican))
+
+          planner = read("selfdrive/controls/lib/longitudinal_planner.py")
+          controls = read("selfdrive/controls/controlsd.py")
+          log_schema = read("cereal/log.capnp")
+          car_schema = read("opendbc_repo/opendbc/car/car.capnp")
+          checks.append(("NEXO lead data path",
+              "longitudinalPlan.leadDistance = lead_one.dRel if lead_one.status else 0.0" in planner and
+              "longitudinalPlan.leadRelSpeed = lead_one.vRel if lead_one.status else 0.0" in planner and
+              "hudControl.leadDistance = self.sm['longitudinalPlan'].leadDistance" in controls and
+              "hudControl.leadRelSpeed = self.sm['longitudinalPlan'].leadRelSpeed" in controls and
+              "leadDistance @40 :Float32;" in log_schema and
+              "leadRelSpeed @41 :Float32;" in log_schema and
+              "leadDistance @11: Float32;" in car_schema and
+              "leadRelSpeed @12: Float32;" in car_schema))
 
           checks.append(("NEXO MAIN passthrough",
               "main_button_events = []" in carstate))
