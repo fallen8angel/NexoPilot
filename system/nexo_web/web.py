@@ -27,6 +27,9 @@ WEB_CAMERA_MARKER = STATE_DIR / "web_camera_active"
 WEB_CAMERA_TIMEOUT = 0
 _camera_lock = threading.Lock()
 _camera_deadline = 0.0
+_model_lock = threading.Lock()
+_model_snapshot: dict[str, object] = {"ready": False}
+_model_deadline = 0.0
 
 # Only expose keys provided by the 11.1 base build. NEXO radar tracks are a
 # required vehicle capability and are enabled automatically in CarInterface.
@@ -249,6 +252,56 @@ def proxy_webrtc_offer(payload: bytes) -> tuple[int, bytes]:
       return response.status, response.read()
   except Exception as error:
     return HTTPStatus.BAD_GATEWAY, json.dumps({"error": f"영상 연결 실패: {error}"}).encode("utf-8")
+
+
+def model_monitor() -> None:
+  """Cache lightweight model geometry for the optional browser overlay."""
+  global _model_snapshot
+  while True:
+    with _model_lock:
+      active = time.monotonic() < _model_deadline
+    if not active:
+      time.sleep(0.5)
+      continue
+    try:
+      sm = messaging.SubMaster(["modelV2", "carState", "selfdriveState"], poll="modelV2")
+      while time.monotonic() < _model_deadline:
+        sm.update(500)
+        if not sm.updated["modelV2"]:
+          continue
+
+        model = sm["modelV2"]
+        snapshot: dict[str, object] = {
+          "ready": True,
+          "monoTime": int(sm.logMonoTime["modelV2"]),
+          "laneLines": [
+            {"x": list(line.x), "y": list(line.y)}
+            for line in model.laneLines
+          ],
+          "laneLineProbs": list(model.laneLineProbs),
+          "roadEdges": [
+            {"x": list(edge.x), "y": list(edge.y)}
+            for edge in model.roadEdges
+          ],
+          "roadEdgeStds": list(model.roadEdgeStds),
+          "path": {"x": list(model.position.x), "y": list(model.position.y)},
+          "speedKph": round(float(sm["carState"].vEgo) * 3.6, 1),
+          "enabled": bool(sm["selfdriveState"].enabled),
+        }
+        with _model_lock:
+          _model_snapshot = snapshot
+    except Exception as error:
+      with _model_lock:
+        _model_snapshot = {"ready": False, "error": str(error)}
+      time.sleep(1.0)
+
+
+def model_snapshot_json() -> bytes:
+  global _model_deadline
+  with _model_lock:
+    _model_deadline = time.monotonic() + 3.0
+    snapshot = dict(_model_snapshot)
+  return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def update_status(fetch: bool = False) -> dict[str, str | bool]:
@@ -482,12 +535,16 @@ a{color:#8eafff;text-decoration:none}.card{background:#151821;border:1px solid #
 
 def live_page() -> str:
   page = '''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 실시간 카메라</title><style>__CSS__
-.camera-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.camera-tabs button{font-size:14px;padding:12px 6px;margin:0;background:#41495b}.camera-tabs button.active{background:#3159d9}.video-wrap{position:relative;aspect-ratio:16/9;background:#000;border-radius:18px;overflow:hidden}.video-wrap video{width:100%;height:100%;object-fit:contain}.camera-status{position:absolute;left:12px;bottom:10px;background:#000b;padding:7px 10px;border-radius:10px;font-size:13px}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>실시간 카메라</h1><div class="card"><div class="camera-tabs"><button data-camera="wideRoad">1 전방 광각</button><button class="active" data-camera="road">2 전방 일반</button><button data-camera="driver">3 실내·운전자</button></div><div class="video-wrap"><video id="cameraVideo" autoplay muted playsinline></video><div id="cameraStatus" class="camera-status">카메라 준비 중</div></div><p class="desc">차량 연결 없이도 콤마 전원과 Wi-Fi만 연결되어 있으면 볼 수 있습니다. 3번은 차량 뒤쪽이 아니라 콤마가 실내를 향해 보는 운전자 카메라입니다.</p></div></main><script>
+.camera-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.camera-tabs button{font-size:14px;padding:12px 6px;margin:0;background:#41495b}.camera-tabs button.active{background:#3159d9}.video-wrap{position:relative;aspect-ratio:16/9;background:#000;border-radius:18px;overflow:hidden}.video-wrap video,.video-wrap canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.video-wrap canvas{pointer-events:none}.camera-status{position:absolute;left:12px;bottom:10px;background:#000b;padding:7px 10px;border-radius:10px;font-size:13px}.overlay-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}.legend{font-size:12px;color:#aeb7c8}.legend b{margin-right:10px}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>실시간 콤마 화면</h1><div class="card"><div class="camera-tabs"><button data-camera="wideRoad">1 전방 광각</button><button class="active" data-camera="road">2 전방 일반</button><button data-camera="driver">3 실내·운전자</button></div><div class="video-wrap"><video id="cameraVideo" autoplay muted playsinline></video><canvas id="modelOverlay"></canvas><div id="cameraStatus" class="camera-status">카메라 준비 중</div></div><div class="overlay-row"><label><input id="showModel" type="checkbox" checked> 차선·주행경로 표시</label><span id="modelStatus" class="legend">모델 대기 중</span></div><div class="legend"><b style="color:#56e39f">■ 주행경로</b><b style="color:#fff">━ 차선</b><b style="color:#ff4d67">━ 도로 경계</b></div><p class="desc">콤마 주행 모델이 인식한 차선, 도로 경계와 예상 주행경로를 실시간으로 겹쳐 표시합니다. 웹 화면은 진단용 근사 투영이므로 실제 조향 가능 여부나 안전 판단 기준으로 사용하지 마세요. 3번은 실내를 향한 운전자 카메라입니다.</p></div></main><script>
 let pc=null;
 let selected="road";
 let heartbeat=null;
+let modelTimer=null;
 const video=document.getElementById("cameraVideo");
 const statusBox=document.getElementById("cameraStatus");
+const modelStatus=document.getElementById("modelStatus");
+const overlay=document.getElementById("modelOverlay");
+const ctx=overlay.getContext("2d");
 
 function waitForIce(connection){
   if(connection.iceGatheringState==="complete") return Promise.resolve();
@@ -504,6 +561,52 @@ function waitForIce(connection){
 
 async function post(path,body){
   return fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:body||"{}"});
+}
+
+function projectPoint(x,y,width,height){
+  const depth=Math.max(0,Math.min(1,x/100));
+  const sy=height*(.96-Math.sqrt(depth)*.52);
+  const lateralScale=width*(.13+.42*(1-depth));
+  return [width*.5-y*lateralScale/4,sy];
+}
+
+function drawLine(line,color,width){
+  const count=Math.min(line.x.length,line.y.length);
+  if(count<2) return;
+  ctx.beginPath();
+  for(let i=0;i<count;i++){
+    const point=projectPoint(line.x[i],line.y[i],overlay.width,overlay.height);
+    if(i===0) ctx.moveTo(point[0],point[1]); else ctx.lineTo(point[0],point[1]);
+  }
+  ctx.strokeStyle=color;
+  ctx.lineWidth=width;
+  ctx.lineCap="round";
+  ctx.stroke();
+}
+
+async function updateModel(){
+  if(!document.getElementById("showModel").checked||selected==="driver"){
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+    modelStatus.textContent=selected==="driver"?"전방 카메라에서만 표시":"표시 꺼짐";
+    return;
+  }
+  try{
+    const response=await fetch("/api/model",{cache:"no-store"});
+    const data=await response.json();
+    overlay.width=overlay.clientWidth*window.devicePixelRatio;
+    overlay.height=overlay.clientHeight*window.devicePixelRatio;
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+    if(!data.ready){modelStatus.textContent="모델 데이터 대기 중";return;}
+    (data.roadEdges||[]).forEach(edge=>drawLine(edge,"rgba(255,77,103,.85)",3*window.devicePixelRatio));
+    (data.laneLines||[]).forEach((line,index)=>{
+      const probability=(data.laneLineProbs||[])[index]||0;
+      drawLine(line,`rgba(255,255,255,${Math.max(.12,probability)})`,3*window.devicePixelRatio);
+    });
+    drawLine(data.path||{x:[],y:[]},"rgba(86,227,159,.95)",6*window.devicePixelRatio);
+    modelStatus.textContent=`${data.speedKph||0} km/h · ${data.enabled?"제어 중":"대기"} · 차선확률 ${(data.laneLineProbs||[]).map(v=>Math.round(v*100)).join("/")}%`;
+  }catch(error){
+    modelStatus.textContent="모델 데이터 연결 실패";
+  }
 }
 
 async function connectCamera(camera){
@@ -546,11 +649,13 @@ document.querySelectorAll("[data-camera]").forEach(button=>button.addEventListen
 
 post("/camera/start").then(()=>{
   heartbeat=setInterval(()=>post("/camera/heartbeat"),5000);
+  modelTimer=setInterval(updateModel,200);
   return connectCamera(selected);
 }).catch(error=>statusBox.textContent=error.message);
 
 window.addEventListener("pagehide",()=>{
   if(heartbeat) clearInterval(heartbeat);
+  if(modelTimer) clearInterval(modelTimer);
   if(pc) pc.close();
   navigator.sendBeacon("/camera/stop","");
 });
@@ -642,6 +747,8 @@ class Handler(BaseHTTPRequestHandler):
       parsed = urlparse(self.path)
       query = parse_qs(parsed.query)
       message = query.get("msg", [""])[0]
+      if parsed.path == "/api/model":
+        self._send_json(model_snapshot_json()); return
       if parsed.path == "/live":
         self._send(live_page()); return
       if parsed.path == "/settings":
@@ -729,6 +836,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
   restore_web_camera()
   threading.Thread(target=camera_watchdog, daemon=True).start()
+  threading.Thread(target=model_monitor, daemon=True).start()
   print(f"NexoPilot web: http://<device-ip>:{PORT}")
   ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
