@@ -129,7 +129,10 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
     assert scc11["ACC_ObjStatus"] == 1
     assert scc11["ACC_ObjDist"] == 42.5
     assert scc11["ACC_ObjRelSpd"] == -1.5
+    assert scc11["SCCInfoDisplay"] == 0
+    assert scc11["DriverAlertDisplay"] == 0
     assert packer.last("SCC14")["ObjGap"] == 4
+    assert packer.last("SCC14")["ObjDistStat"] == 2
 
     self.hud.leadVisible = False
     packer = self.create_commands(enabled=True)
@@ -139,17 +142,18 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
     assert scc11["ACC_ObjDist"] == 0
     assert scc11["ACC_ObjRelSpd"] == 0
     assert packer.last("SCC14")["ObjGap"] == 0
+    assert packer.last("SCC14")["ObjDistStat"] == 0
 
-  def test_nexo_preserves_stock_scc_fields(self):
+  def test_nexo_preserves_unowned_stock_scc_fields(self):
     packer = self.create_commands(
       enabled=True,
       stock_scc11={"SCCInfoDisplay": 4},
       stock_scc12={"CF_VSM_Warn": 0},
       stock_scc14={"ObjDistStat": 3},
     )
-    assert packer.last("SCC11")["SCCInfoDisplay"] == 4
+    assert packer.last("SCC11")["SCCInfoDisplay"] == 0
     assert packer.last("SCC12")["CF_VSM_Warn"] == 0
-    assert packer.last("SCC14")["ObjDistStat"] == 3
+    assert packer.last("SCC14")["ObjDistStat"] == 2
     assert packer.last("SCC12")["ACCMode"] == 1
     assert packer.last("SCC12")["ACCFailInfo"] == 0
     assert packer.last("SCC12")["TakeOverReq"] == 0

@@ -153,11 +153,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "TauGapSet": hud_control.leadDistanceBars,
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
+    # Do not replay a stale stock "lost lead"/"standstill" message after the
+    # radar ECU has been disabled. Carrot explicitly owns both display fields.
+    "SCCInfoDisplay": 0,
     "ObjValid": 1 if lead_visible else 0,
     "ACC_ObjStatus": 1 if lead_visible else 0,
     "ACC_ObjLatPos": 0,
     "ACC_ObjRelSpd": lead_rel_speed,
     "ACC_ObjDist": lead_distance,
+    "DriverAlertDisplay": 0,
   })
   commands.append(packer.make_can_msg("SCC11", 0, scc11_values))
 
@@ -194,6 +198,9 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": obj_gap, # 5: >70 m, 4: 40-70 m, 3: 25-40 m, 2: <25 m, 0: no lead
+    # Match Carrot's NEXO/Santa Fe SCC14 lead-state encoding instead of
+    # preserving a stale state from the last stock radar frame.
+    "ObjDistStat": 0 if not lead_visible else 2 if lead_rel_speed < -0.2 else 1,
   })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
