@@ -100,10 +100,11 @@ jobs:
               'sub_sock("controlsState"' not in web))
 
           interface = Path("opendbc_repo/opendbc/car/hyundai/interface.py").read_text()
-          checks.append(("NEXO Panda longitudinal safety lockstep",
-              "ret.alphaLongitudinalAvailable if is_nexo" in interface and
-              "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" in interface and
-              "ret.safetyConfigs[-1].safetyParam |= nexo_safety_param.value" in interface))
+          checks.append(("NEXO longitudinal toggle and Panda safety lockstep",
+              "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable" in interface and
+              "if ret.openpilotLongitudinalControl:" in interface and
+              "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in interface and
+              "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" not in interface))
           checks.append(("NEXO radar configure before SCC silence",
               interface.index("if not enable_radar_tracks") <
               interface.index("disable_sent = disable_ecu", interface.index("if not enable_radar_tracks")) and
