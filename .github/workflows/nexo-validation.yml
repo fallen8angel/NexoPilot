@@ -30,6 +30,8 @@ jobs:
             opendbc_repo/opendbc/car/hyundai/values.py \
             opendbc_repo/opendbc/car/hyundai/carstate.py \
             opendbc_repo/opendbc/car/hyundai/radar_interface.py \
+            selfdrive/car/card.py \
+            selfdrive/car/tests/test_card.py \
             system/nexo_web/web.py
 
       - name: Check NEXO integration
@@ -52,6 +54,7 @@ jobs:
           values = read("opendbc_repo/opendbc/car/hyundai/values.py")
           carstate = read("opendbc_repo/opendbc/car/hyundai/carstate.py")
           radar = read("opendbc_repo/opendbc/car/hyundai/radar_interface.py")
+          card = read("selfdrive/car/card.py")
           launch = read("launch_openpilot.sh")
           web = read("system/nexo_web/web.py")
 
@@ -89,6 +92,11 @@ jobs:
 
           checks.append(("NEXO radar 20 Hz",
               "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))
+
+          checks.append(("NEXO stock cruise recovery",
+              'params.put_bool("AlphaLongitudinalEnabled", False, block=True)' in card and
+              'params.put_bool("ExperimentalMode", False, block=True)' in card and
+              "recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)" in card))
 
           checks.append(("current selfdrive diagnostics",
               'sub_sock("selfdriveState"' in web and

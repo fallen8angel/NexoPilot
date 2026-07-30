@@ -23,6 +23,11 @@ from openpilot.selfdrive.car.cruise import VCruiseHelper
 REPLAY = "REPLAY" in os.environ
 
 EventName = log.OnroadEvent.EventName
+NEXO_LONGITUDINAL_INIT_FAILURES = (
+  "NEXO radar track activation failed",
+  "NEXO stock SCC communication could not be disabled",
+  "NEXO stock SCC remained active",
+)
 
 # forward
 carlog.addHandler(ForwardingHandler(cloudlog))
@@ -37,6 +42,21 @@ def obd_callback(params: Params) -> ObdCallback:
       params.get_bool("ObdMultiplexingChanged", block=True)
       cloudlog.warning("OBD multiplexing set successfully")
   return set_obd_multiplexing
+
+
+def recover_nexo_stock_cruise(params: Params, car_fingerprint: str, error: Exception) -> bool:
+  """Fall back to stock SCC after a verified NEXO longitudinal initialization failure."""
+  if car_fingerprint != "HYUNDAI_NEXO_1ST_GEN":
+    return False
+
+  reason = str(error)
+  if not any(message in reason for message in NEXO_LONGITUDINAL_INIT_FAILURES):
+    return False
+
+  params.put_bool("AlphaLongitudinalEnabled", False, block=True)
+  params.put_bool("ExperimentalMode", False, block=True)
+  cloudlog.error(f"NEXO longitudinal setup failed; restoring stock cruise on restart: {reason}")
+  return True
 
 
 def can_comm_callbacks(logcan: messaging.SubSocket, sendcan: messaging.PubSocket) -> tuple[CanRecvCallable, CanSendCallable]:
@@ -226,7 +246,11 @@ class Car:
     if not self.initialized_prev:
       # Initialize CarInterface, once controls are ready
       # TODO: this can make us miss at least a few cycles when doing an ECU knockout
-      self.CI.init(self.CP, *self.can_callbacks)
+      try:
+        self.CI.init(self.CP, *self.can_callbacks)
+      except RuntimeError as error:
+        recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
+        raise
       # signal pandad to switch to car safety mode
       self.params.put_bool("ControlsReady", True)
 
