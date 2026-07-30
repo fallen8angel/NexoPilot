@@ -29,7 +29,9 @@ jobs:
           python -m py_compile \
             opendbc_repo/opendbc/car/hyundai/values.py \
             opendbc_repo/opendbc/car/hyundai/carstate.py \
+            opendbc_repo/opendbc/car/hyundai/interface.py \
             opendbc_repo/opendbc/car/hyundai/radar_interface.py \
+            opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py \
             selfdrive/car/card.py \
             selfdrive/car/tests/test_card.py \
             system/nexo_web/web.py
@@ -115,12 +117,12 @@ jobs:
               "if ret.openpilotLongitudinalControl:" in interface and
               "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in interface and
               "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" not in interface))
-          checks.append(("NEXO radar configure before SCC silence",
-              interface.index("if not enable_radar_tracks") <
-              interface.index("disable_sent = disable_ecu", interface.index("if not enable_radar_tracks")) and
-              "nexo_stock_scc_is_silent" in interface and
-              "NEXO stock SCC silence verified" in interface and
-              "NEXO stock SCC remained active; longitudinal control not started" in interface))
+          checks.append(("Carrot NEXO disable-then-radar sequence",
+              interface.index("disabled = disable_ecu") <
+              interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) and
+              "nexo_stock_scc_is_silent" not in interface and
+              "raise RuntimeError(\"NEXO" not in interface and
+              "retries=1" in interface))
 
           checks.append(("apply removed",
               "apply_nexo_ai.py" not in launch))
