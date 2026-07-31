@@ -23,6 +23,7 @@ PORT = 7000
 REPO_DIR = Path("/data/openpilot")
 STATE_DIR = Path("/data/nexopilot")
 FORCE_NEXO_FILE = STATE_DIR / "force_nexo"
+NEXO_LONG_INIT_LOG = Path("/data/nexo_long_init.log")
 BRANCH = "NEXO"
 MAX_REQUEST_BODY = 64 * 1024
 WEBRTCD_URL = "http://127.0.0.1:5001/stream"
@@ -389,6 +390,14 @@ def important_log_output() -> str:
   return "\n".join(lines)
 
 
+def nexo_long_init_output() -> str:
+  try:
+    output = NEXO_LONG_INIT_LOG.read_text(encoding="utf-8", errors="replace")
+  except OSError:
+    return "아직 롱컨 초기화 기록이 없습니다. 재부팅 후 다시 확인해 주세요."
+  return output[-12000:] or "롱컨 초기화 기록이 비어 있습니다."
+
+
 def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   """Capture a read-only time line around a NEXO longitudinal fault."""
   started = time.monotonic()
@@ -403,6 +412,7 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   timeline = []
   previous = None
   previous_error = None
+  first_acc_fault_at = None
 
   while time.monotonic() - started < duration:
     sm.update(50)
@@ -436,6 +446,8 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
       )
       if snapshot != previous:
         elapsed = time.monotonic() - started
+        if snapshot[3] and (previous is None or not previous[3]) and first_acc_fault_at is None:
+          first_acc_fault_at = elapsed
         timeline.append(
           f"{elapsed:6.2f}s gear={snapshot[0]} brake={snapshot[1]} gas={snapshot[2]} "
           f"accFault={snapshot[3]} cruise={snapshot[4]}/{snapshot[5]} "
@@ -453,6 +465,24 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
         previous_error = error_text
     time.sleep(0.02)
 
+  scc_addresses = {0x389, 0x38D, 0x420, 0x421, 0x483, 0x50A}
+  stock_scc_count = sum(count for (source, address), count in can_counts.items()
+                        if source < 128 and address in scc_addresses)
+  openpilot_scc_count = sum(count for (source, address), count in can_counts.items()
+                            if 128 <= source < 192 and address in scc_addresses)
+  blocked_scc_count = sum(count for (source, address), count in can_counts.items()
+                          if source >= 192 and address in scc_addresses)
+  radar_track_count = sum(count for (_, address), count in can_counts.items()
+                          if 0x500 <= address <= 0x51F and address != 0x50A)
+  if stock_scc_count and openpilot_scc_count:
+    overlap_verdict = "순정 SCC와 openpilot SCC가 동시에 관측됨: 순정 SCC 통신 억제 실패 또는 중복 제어 가능성이 큽니다."
+  elif openpilot_scc_count:
+    overlap_verdict = "openpilot SCC만 관측됨: 순정 SCC 통신 억제는 정상으로 보입니다."
+  elif stock_scc_count:
+    overlap_verdict = "순정 SCC만 관측됨: openpilot 종방향 송신이 시작되지 않았습니다."
+  else:
+    overlap_verdict = "SCC 송신을 관측하지 못했습니다."
+
   lines = [
     "NexoPilot NEXO 롱컨 블랙박스",
     f"수집 시각: {wall_time}",
@@ -462,6 +492,14 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
     "[상태 변화]",
     *(timeline or ["상태 메시지를 수신하지 못했습니다."]),
     "",
+    "[NEXO 롱컨 자동 판정]",
+    f"첫 accFault 전환: {first_acc_fault_at:.2f}초" if first_acc_fault_at is not None else "첫 accFault 전환: 관측되지 않음",
+    f"순정 SCC/FCA 프레임: {stock_scc_count}",
+    f"openpilot SCC/FCA 프레임: {openpilot_scc_count}",
+    f"Panda 차단 SCC/FCA 프레임: {blocked_scc_count}",
+    f"레이더 트랙 프레임: {radar_track_count}",
+    f"판정: {overlap_verdict}",
+    "",
     "[SCC/FCA/레이더 CAN 집계]",
   ]
   for (source, address), count in sorted(can_counts.items()):
@@ -469,6 +507,7 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
     lines.append(f"src={source:3d} {name:12s} 0x{address:03X} {count:5d}회 | {can_latest[(source, address)]}")
   if not can_counts:
     lines.append("감시 대상 CAN 메시지를 수신하지 못했습니다.")
+  lines.extend(["", "[롱컨 초기화 추적]", nexo_long_init_output()])
   lines.extend(["", "[핵심 오류 로그]", important_log_output()])
   return "\n".join(lines)
 
@@ -800,6 +839,7 @@ def diagnostic_page(message: str = "") -> str:
 <h2>NEXO 실시간 차량 상태</h2><pre>{html.escape(live_vehicle_output())}</pre>
 </div>
 <div class="card"><h2>롱컨 블랙박스</h2><p class="desc">버튼을 누른 뒤 8초 동안 크루즈·Panda 안전 상태와 SCC/FCA/레이더 CAN을 시간순으로 기록합니다. 읽기 전용이며 차량 제어에는 관여하지 않습니다.</p><form method="post" action="/diagnostics/capture"><button>8초 진단 파일 받기</button></form></div>
+<div class="card"><h2>롱컨 초기화 추적</h2><p class="desc">disable ECU 요청, 레이더 트랙 활성화, 최종 재차단 단계를 보여줍니다. 요청 성공만으로 순정 SCC 정지가 보장되지는 않으므로 실제 정지 여부는 블랙박스 자동 판정으로 확인합니다.</p><pre>{html.escape(nexo_long_init_output())}</pre></div>
 <div class="card"><h2>핵심 오류 요약</h2><pre>{html.escape(important_log_output())}</pre></div>
 <div class="card"><h2>SCC·FCA·레이더 실제 CAN</h2><pre>{html.escape(raw_can_diagnostic_output())}</pre></div>
 <div class="card"><h2>핵심 프로세스 상태</h2><pre>{html.escape(process_output())}</pre></div></main></body></html>'''
