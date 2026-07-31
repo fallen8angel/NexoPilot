@@ -29,7 +29,7 @@ class TestNexoLongitudinalInit(unittest.TestCase):
          patch("opendbc.car.hyundai.interface.enable_radar_tracks", side_effect=enable):
       CarInterface.init(self.CP, object(), object())
 
-    self.assertEqual(["disable", "enable"], calls)
+    self.assertEqual(["disable", "enable", "disable"], calls)
 
   def test_stock_scc_disable_failure_stops_long_init(self):
     with patch("opendbc.car.hyundai.interface.disable_ecu", return_value=False), \
@@ -52,6 +52,20 @@ class TestNexoLongitudinalInit(unittest.TestCase):
     self.assertEqual(3, enable.call_args.kwargs["retries"])
     self.assertEqual(b"\x28\x83\x01", calls[0])
     self.assertEqual(b"\x28\x80\x01", calls[1])
+
+  def test_post_track_disable_failure_restores_stock_scc(self):
+    calls = []
+
+    def disable(*args, **kwargs):
+      calls.append(kwargs["com_cont_req"])
+      return len(calls) != 2
+
+    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=disable), \
+         patch("opendbc.car.hyundai.interface.enable_radar_tracks", return_value=True):
+      with self.assertRaisesRegex(RuntimeError, "resumed after radar track activation"):
+        CarInterface.init(self.CP, object(), object())
+
+    self.assertEqual([b"\x28\x83\x01", b"\x28\x83\x01", b"\x28\x80\x01"], calls)
 
   def test_stock_cruise_does_not_touch_radar(self):
     self.CP.openpilotLongitudinalControl = False

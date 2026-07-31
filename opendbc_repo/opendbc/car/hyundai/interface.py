@@ -193,6 +193,22 @@ class CarInterface(CarInterfaceBase):
                                         uds.MESSAGE_TYPE.NORMAL])
           disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=enable_communication)
           raise RuntimeError("NEXO radar track activation failed")
+
+        # Writing the radar-track DID changes the radar diagnostic state. On
+        # the NEXO firmware this can resume the stock SCC11/12/14 transmitter,
+        # even though communication was disabled immediately beforehand. That
+        # leaves two longitudinal controllers on PT-CAN and Panda correctly
+        # reports a relay malfunction and blocks openpilot SCC frames. Reapply
+        # communication control after the DID write; only enter long control
+        # when this final stock-SCC suppression succeeds.
+        disabled_after_tracks = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
+                                            com_cont_req=communication_control)
+        if not disabled_after_tracks:
+          enable_communication = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
+                                        0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
+                                        uds.MESSAGE_TYPE.NORMAL])
+          disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=enable_communication)
+          raise RuntimeError("NEXO stock SCC communication resumed after radar track activation")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
