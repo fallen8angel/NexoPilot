@@ -299,6 +299,12 @@ class DriverMonitoring:
     self.alert_level = AlertLevel.none
     self.driver_interacting = driver_engaged
 
+    # Keep dmonitoringd publishing for process/message health, but do not run the
+    # warning timer while parked or while openpilot cruise is disengaged.
+    if wrong_gear or not op_engaged:
+      self._reset_awareness()
+      return
+
     if self.terminal_alert_cnt >= self.settings._MAX_TERMINAL_ALERTS or \
        self.terminal_time >= self.settings._MAX_TERMINAL_DURATION:
       self.too_distracted = True

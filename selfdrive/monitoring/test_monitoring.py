@@ -178,6 +178,19 @@ class TestMonitoring:
     alert_lvls, _ = self._run_seq(always_distracted, always_false, always_false, always_false)
     assert all(a == 0 for a in alert_lvls)
 
+  def test_monitoring_resets_outside_active_cruise(self):
+    dm = DriverMonitoring(always_on=True)
+
+    dm.awareness = 0.2
+    dm._update_events(False, False, False, False)
+    assert dm.awareness == 1.0
+    assert dm.alert_level == 0
+
+    dm.awareness = 0.2
+    dm._update_events(False, True, False, True)
+    assert dm.awareness == 1.0
+    assert dm.alert_level == 0
+
   # engaged, car stops at traffic light, down to orange, no action, then car starts moving
   #  - should only reach green when stopped, but continues counting down on launch
   def test_long_traffic_light_victim(self):
