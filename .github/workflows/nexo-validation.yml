@@ -40,6 +40,9 @@ jobs:
             selfdrive/controls/lib/longitudinal_planner.py \
             system/nexo_web/web.py
 
+      - name: Check NEXO DBC contract
+        run: python tools/check_nexo_dbc_contract.py
+
       - name: Check NEXO integration
         shell: python
         run: |
