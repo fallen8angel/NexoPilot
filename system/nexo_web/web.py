@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import html
 import json
+import re
 import socket
 import subprocess
 import threading
 import time
 import traceback
+from collections import Counter
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -354,6 +357,122 @@ def tmux_output() -> str:
   return "\n\n".join(blocks) or "tmux 출력 없음"
 
 
+IMPORTANT_LOG_PATTERN = re.compile(
+  r"(unknown signal|traceback|exception|fatal|error|fault|mismatch|bus off|"
+  r"controlsallowed|cruise|radar|scc|fca|aeb|fcw|disable[_ ]ecu|safety)",
+  re.IGNORECASE,
+)
+
+
+def important_log_output() -> str:
+  """Return a compact, de-duplicated summary instead of flooding the page."""
+  raw = tmux_output()
+  matches = Counter()
+  samples = {}
+  for raw_line in raw.splitlines():
+    line = re.sub(r"\s+", " ", raw_line.strip())
+    if not line or not IMPORTANT_LOG_PATTERN.search(line):
+      continue
+    # Runtime timestamps and counters make otherwise identical errors unique.
+    key = re.sub(r"^\d\d:\d\d:\d\d(?:\.\d+)?\s+", "", line)
+    key = re.sub(r"\b((?:count|attempt)\s*[=:]?)\s*\d+\b", r"\1 <N>", key, flags=re.IGNORECASE)
+    matches[key] += 1
+    samples.setdefault(key, line)
+
+  if not matches:
+    return "최근 로그에서 롱컨·레이더·안전 관련 오류를 찾지 못했습니다."
+
+  lines = ["중복 로그는 한 줄로 합쳤습니다."]
+  for key, count in matches.most_common(80):
+    suffix = f"  (반복 {count}회)" if count > 1 else ""
+    lines.append(f"{samples[key]}{suffix}")
+  return "\n".join(lines)
+
+
+def longitudinal_blackbox_output(duration: float = 8.0) -> str:
+  """Capture a read-only time line around a NEXO longitudinal fault."""
+  started = time.monotonic()
+  wall_time = datetime.now().astimezone().isoformat(timespec="seconds")
+  services = ("carState", "selfdriveState", "pandaStates", "radarState")
+  sm = messaging.SubMaster(list(services))
+  can_sock = messaging.sub_sock("can", timeout=20)
+  watched = {0x389: "SCC14", 0x38D: "FCA11", 0x420: "SCC11", 0x421: "SCC12",
+             0x483: "FCA12", 0x4A2: "FRT_RADAR11", 0x50A: "SCC13"}
+  can_counts: Counter[tuple[int, int]] = Counter()
+  can_latest: dict[tuple[int, int], str] = {}
+  timeline = []
+  previous = None
+  previous_error = None
+
+  while time.monotonic() - started < duration:
+    sm.update(50)
+    try:
+      event = messaging.recv_one_or_none(can_sock)
+      if event is not None:
+        for frame in event.can:
+          address, source = int(frame.address), int(frame.src)
+          if address in watched or 0x500 <= address <= 0x51F:
+            can_counts[(source, address)] += 1
+            can_latest[(source, address)] = bytes(frame.dat).hex(" ")
+    except Exception:
+      pass
+
+    try:
+      cs = sm["carState"]
+      ss = sm["selfdriveState"]
+      pandas = sm["pandaStates"]
+      radar = sm["radarState"]
+      panda = pandas[0] if len(pandas) else None
+      errors = radar.radarErrors
+      snapshot = (
+        str(cs.gearShifter), bool(cs.brakePressed), bool(cs.gasPressed), bool(cs.accFaulted),
+        bool(cs.cruiseState.available), bool(cs.cruiseState.enabled),
+        str(ss.state), bool(ss.enabled), bool(ss.active), str(ss.alertText1), str(ss.alertText2),
+        bool(panda.controlsAllowed) if panda is not None else None,
+        int(panda.safetyParam) if panda is not None else None,
+        bool(panda.safetyRxChecksInvalid) if panda is not None else None,
+        bool(errors.canError), bool(errors.radarFault), bool(errors.wrongConfig),
+        bool(errors.radarUnavailableTemporary),
+      )
+      if snapshot != previous:
+        elapsed = time.monotonic() - started
+        timeline.append(
+          f"{elapsed:6.2f}s gear={snapshot[0]} brake={snapshot[1]} gas={snapshot[2]} "
+          f"accFault={snapshot[3]} cruise={snapshot[4]}/{snapshot[5]} "
+          f"selfdrive={snapshot[6]}/{snapshot[7]}/{snapshot[8]} "
+          f"controlsAllowed={snapshot[11]} safetyParam={snapshot[12]} "
+          f"rxInvalid={snapshot[13]} radarErrors={snapshot[14:18]} "
+          f"alert={snapshot[9]!r} {snapshot[10]!r}"
+        )
+        previous = snapshot
+        previous_error = None
+    except Exception as error:
+      error_text = str(error)
+      if error_text != previous_error:
+        timeline.append(f"{time.monotonic() - started:6.2f}s 상태 읽기 실패: {error_text}")
+        previous_error = error_text
+    time.sleep(0.02)
+
+  lines = [
+    "NexoPilot NEXO 롱컨 블랙박스",
+    f"수집 시각: {wall_time}",
+    f"Git: {git_value('rev-parse', '--short', 'HEAD')}",
+    f"수집 시간: {duration:.1f}초",
+    "",
+    "[상태 변화]",
+    *(timeline or ["상태 메시지를 수신하지 못했습니다."]),
+    "",
+    "[SCC/FCA/레이더 CAN 집계]",
+  ]
+  for (source, address), count in sorted(can_counts.items()):
+    name = watched.get(address, "RADAR_TRACK")
+    lines.append(f"src={source:3d} {name:12s} 0x{address:03X} {count:5d}회 | {can_latest[(source, address)]}")
+  if not can_counts:
+    lines.append("감시 대상 CAN 메시지를 수신하지 못했습니다.")
+  lines.extend(["", "[핵심 오류 로그]", important_log_output()])
+  return "\n".join(lines)
+
+
 def live_vehicle_output() -> str:
   lines = []
   try:
@@ -680,8 +799,10 @@ def diagnostic_page(message: str = "") -> str:
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단</title><style>{base_css()}</style></head><body><main><p><a href="/">← 메인 화면</a></p><h1>진단 도구</h1>{msg}<div class="card"><div class="row"><span>차량</span><span class="value">{html.escape(status['car'])}</span></div><div class="row"><span>롱컨</span><span class="value">{html.escape(status['longitudinal'])}</span></div><div class="row"><span>레이더</span><span class="value">{html.escape(status['radar'])}</span></div><div class="row"><span>레이더 모드</span><span class="value">자동 활성화</span></div></div><div class="card">
 <h2>NEXO 실시간 차량 상태</h2><pre>{html.escape(live_vehicle_output())}</pre>
 </div>
+<div class="card"><h2>롱컨 블랙박스</h2><p class="desc">버튼을 누른 뒤 8초 동안 크루즈·Panda 안전 상태와 SCC/FCA/레이더 CAN을 시간순으로 기록합니다. 읽기 전용이며 차량 제어에는 관여하지 않습니다.</p><form method="post" action="/diagnostics/capture"><button>8초 진단 파일 받기</button></form></div>
+<div class="card"><h2>핵심 오류 요약</h2><pre>{html.escape(important_log_output())}</pre></div>
 <div class="card"><h2>SCC·FCA·레이더 실제 CAN</h2><pre>{html.escape(raw_can_diagnostic_output())}</pre></div>
-<div class="card"><h2>레이더·FCA 프로그램 로그</h2><pre>{html.escape(radar_diagnostic_output())}</pre></div><div class="card"><h2>tmux 로그</h2><pre>{html.escape(tmux_output())}</pre></div><div class="card"><h2>프로세스 검사</h2><pre>{html.escape(process_output())}</pre></div><div class="card"><h2>시스템 검사</h2><pre>{html.escape(system_output())}</pre></div></main></body></html>'''
+<div class="card"><h2>핵심 프로세스 상태</h2><pre>{html.escape(process_output())}</pre></div></main></body></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -725,6 +846,16 @@ class Handler(BaseHTTPRequestHandler):
   def _send_json(self, data: bytes, status: int = HTTPStatus.OK) -> None:
     self.send_response(status)
     self.send_header("Content-Type", "application/json; charset=utf-8")
+    self.send_header("Content-Length", str(len(data)))
+    self.send_header("Cache-Control", "no-store")
+    self.end_headers()
+    self.wfile.write(data)
+
+  def _send_download(self, text: str, filename: str) -> None:
+    data = text.encode("utf-8")
+    self.send_response(HTTPStatus.OK)
+    self.send_header("Content-Type", "text/plain; charset=utf-8")
+    self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
     self.send_header("Content-Length", str(len(data)))
     self.send_header("Cache-Control", "no-store")
     self.end_headers()
@@ -775,6 +906,11 @@ class Handler(BaseHTTPRequestHandler):
         self._send("요청이 너무 큽니다.", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
         return
       body = self.rfile.read(length)
+      if self.path == "/diagnostics/capture":
+        capture = longitudinal_blackbox_output()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self._send_download(capture, f"nexo-long-{stamp}.txt")
+        return
       if self.path == "/camera/start":
         start_web_camera()
         self._send_json(b'{"ok":true}')

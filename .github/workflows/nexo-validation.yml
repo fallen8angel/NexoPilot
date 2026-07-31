@@ -144,6 +144,15 @@ jobs:
               'return "안전 차단", source - 192' in web and
               'sub_sock("controlsState"' not in web))
 
+          checks.append(("NEXO longitudinal blackbox diagnostics",
+              "def longitudinal_blackbox_output" in web and
+              'action="/diagnostics/capture"' in web and
+              'self.path == "/diagnostics/capture"' in web and
+              "controlsAllowed=" in web and
+              "safetyParam=" in web and
+              "SCC/FCA/레이더 CAN 집계" in web and
+              "def important_log_output" in web))
+
           interface = Path("opendbc_repo/opendbc/car/hyundai/interface.py").read_text()
           checks.append(("NEXO longitudinal toggle and Panda safety lockstep",
               "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable" in interface and
