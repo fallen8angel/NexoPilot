@@ -63,9 +63,9 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # NEXO openpilot longitudinal disables the stock SCC ECU before card starts.
-    # Keep empty templates and let hyundaican fill every field openpilot owns;
-    # reading SCC11/SCC12/SCC14 after suppression incorrectly marks them missing.
+    # Preserve the latest complete stock SCC templates. NEXO keeps these
+    # cluster-facing messages alive during radar-track mode, and Carrot-style
+    # longitudinal control only overwrites the fields it owns.
     self.scc11 = {}
     self.scc12 = {}
     self.scc14 = {}
@@ -141,20 +141,17 @@ class CarState(CarStateBase):
       ret.cruiseState.available = cp_cruise.vl["SCC11"]["MainMode_ACC"] == 1
       ret.cruiseState.enabled = cp_cruise.vl["SCC12"]["ACCMode"] != 0
       ret.cruiseState.standstill = cp_cruise.vl["SCC11"]["SCCInfoDisplay"] == 4.
-      ret.cruiseState.nonAdaptive = cp_cruise.vl["SCC11"]["SCCInfoDisplay"] == 2.  # Shows 'Cruise Control' on dash
+      ret.cruiseState.nonAdaptive = cp_cruise.vl["SCC11"]["SCCInfoDisplay"] == 2.
       ret.cruiseState.speed = cp_cruise.vl["SCC11"]["VSetDis"] * speed_conv
 
-    # TODO: Find brake pressure
     ret.brake = 0
-    ret.brakePressed = cp.vl["TCS13"]["DriverOverride"] == 2  # 2 includes regen braking by user on HEV/EV
-    ret.brakeHoldActive = cp.vl["TCS15"]["AVH_LAMP"] == 2  # 0 OFF, 1 ERROR, 2 ACTIVE, 3 READY
+    ret.brakePressed = cp.vl["TCS13"]["DriverOverride"] == 2
+    ret.brakeHoldActive = cp.vl["TCS15"]["AVH_LAMP"] == 2
     ret.parkingBrake = cp.vl["TCS13"]["PBRAKE_ACT"] == 1
     ret.espDisabled = cp.vl["TCS11"]["TCS_PAS"] == 1
     ret.espActive = cp.vl["TCS11"]["ABS_ACT"] == 1
-    acc_faulted = cp.vl["TCS13"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
+    acc_faulted = cp.vl["TCS13"]["ACCEnable"] != 0
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
-      # Expected after disabling stock SCC; real CAN/Panda faults remain
-      # available through canValid, rxChecks and safety events.
       ret.accFaulted = False
     else:
       ret.accFaulted = acc_faulted
@@ -169,11 +166,7 @@ class CarState(CarStateBase):
     else:
       ret.gasPressed = bool(cp.vl["EMS16"]["CF_Ems_AclAct"])
 
-    # Gear Selection via Cluster - For those Kia/Hyundai which are not fully discovered, we can use the Cluster Indicator for Gear Selection,
-    # as this seems to be standard over all cars, but is not the preferred method.
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
-      # Learned NEXO EMS20.HYDROGEN_GEAR_SHIFTER raw values:
-      # P=0, D=5, N=6, R=7. Unknown values retain the last valid gear.
       gear = cp.vl["EMS20"]["HYDROGEN_GEAR_SHIFTER"]
       gear_map = {
         0: structs.CarState.GearShifter.park,
@@ -195,14 +188,13 @@ class CarState(CarStateBase):
         gear = cp.vl["TCU12"]["CUR_GR"]
       else:
         gear = cp.vl["LVR12"]["CF_Lvr_Gear"]
-
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
 
     if not self.CP.openpilotLongitudinalControl or self.CP.flags & HyundaiFlags.CAMERA_SCC:
       aeb_src = "FCA11" if self.CP.flags & HyundaiFlags.USE_FCA.value else "SCC12"
       aeb_sig = "FCA_CmdAct" if self.CP.flags & HyundaiFlags.USE_FCA.value else "AEB_CmdAct"
       aeb_warning = cp_cruise.vl[aeb_src]["CF_VSM_Warn"] != 0
-      scc_warning = cp_cruise.vl["SCC12"]["TakeOverReq"] == 1  # sometimes only SCC system shows an FCW
+      scc_warning = cp_cruise.vl["SCC12"]["TakeOverReq"] == 1
       aeb_braking = cp_cruise.vl[aeb_src]["CF_VSM_DecCmdAct"] != 0 or cp_cruise.vl[aeb_src][aeb_sig] != 0
       ret.stockFcw = (aeb_warning or scc_warning) and not aeb_braking
       ret.stockAeb = aeb_warning and aeb_braking
@@ -211,14 +203,16 @@ class CarState(CarStateBase):
       ret.leftBlindspot = cp.vl["LCA11"]["CF_Lca_IndLeft"] != 0
       ret.rightBlindspot = cp.vl["LCA11"]["CF_Lca_IndRight"] != 0
 
-    # save the entire LKAS11 and CLU11
     self.lkas11 = copy.copy(cp_cam.vl["LKAS11"])
     self.clu11 = copy.copy(cp.vl["CLU11"])
-    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and not self.CP.openpilotLongitudinalControl:
-      self.scc11 = copy.copy(cp_cruise.vl["SCC11"])
-      self.scc12 = copy.copy(cp_cruise.vl["SCC12"])
-      self.scc14 = copy.copy(cp_cruise.vl["SCC14"])
-    self.steer_state = cp.vl["MDPS12"]["CF_Mdps_ToiActive"]  # 0 NOT ACTIVE, 1 ACTIVE
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      if cp_cruise.vl["SCC11"]:
+        self.scc11 = copy.copy(cp_cruise.vl["SCC11"])
+      if cp_cruise.vl["SCC12"]:
+        self.scc12 = copy.copy(cp_cruise.vl["SCC12"])
+      if cp_cruise.vl["SCC14"]:
+        self.scc14 = copy.copy(cp_cruise.vl["SCC14"])
+    self.steer_state = cp.vl["MDPS12"]["CF_Mdps_ToiActive"]
     prev_cruise_buttons = self.cruise_buttons[-1]
     prev_main_buttons = self.main_buttons[-1]
     prev_lda_button = self.lda_button
@@ -229,29 +223,23 @@ class CarState(CarStateBase):
 
     main_button_events = create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise})
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
-      # NEXO's MAIN button cycles the vehicle cluster between CRUISE and LIMIT.
-      # Do not reinterpret it as an openpilot enable/toggle event.
       main_button_events = []
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
                         *main_button_events,
                         *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
-
     ret.blockPcmEnable = not self.recent_button_interaction()
 
-    # low speed steer alert hysteresis logic (only for cars with steer cut off above 10 m/s)
     if ret.vEgo < (self.CP.minSteerSpeed + 2.) and self.CP.minSteerSpeed > 10.:
       self.low_speed_alert = True
     if ret.vEgo > (self.CP.minSteerSpeed + 4.):
       self.low_speed_alert = False
     ret.lowSpeedAlert = self.low_speed_alert
-
     return ret
 
   def update_canfd(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
-
     ret = structs.CarState()
 
     self.is_metric = cp.vl["CRUISE_BUTTONS_ALT"]["DISTANCE_UNIT"] != 1
@@ -263,14 +251,12 @@ class CarState(CarStateBase):
       ret.gasPressed = bool(cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL_PRESSED"])
 
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
-
     ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
     ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
 
     gear = cp.vl[self.gear_msg_canfd]["GEAR"]
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
 
-    # TODO: figure out positions
     self.parse_wheel_speeds(ret,
       cp.vl["WHEEL_SPEEDS"]["WHL_SpdFLVal"],
       cp.vl["WHEEL_SPEEDS"]["WHL_SpdFRVal"],
@@ -287,7 +273,6 @@ class CarState(CarStateBase):
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > self.params.STEER_THRESHOLD, 5)
     ret.steerFaultTemporary = cp.vl["MDPS"]["MDPS_LkaFailSta"] != 0
 
-    # TODO: alt signal usage may be described by cp.vl['BLINKERS']['USE_ALT_LAMP']
     left_blinker_sig, right_blinker_sig = "LEFT_LAMP", "RIGHT_LAMP"
     if self.CP.carFingerprint == CAR.HYUNDAI_KONA_EV_2ND_GEN:
       left_blinker_sig, right_blinker_sig = "LEFT_LAMP_ALT", "RIGHT_LAMP_ALT"
@@ -297,11 +282,8 @@ class CarState(CarStateBase):
       ret.leftBlindspot = bool(cp.vl["ADAS_CMD_50_50ms"]["BCW_LtIndSta"])
       ret.rightBlindspot = bool(cp.vl["ADAS_CMD_50_50ms"]["BCW_RtIndSta"])
 
-    # cruise state
-    # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = cp.vl["TCS"]["ACCEnable"] == 0
     if self.CP.openpilotLongitudinalControl:
-      # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       ret.cruiseState.enabled = cp.vl["TCS"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
     else:
@@ -311,10 +293,6 @@ class CarState(CarStateBase):
       ret.cruiseState.speed = cp_cruise_info.vl["SCC_CONTROL"]["VSetDis"] * speed_factor
       self.cruise_info = copy.copy(cp_cruise_info.vl["SCC_CONTROL"])
 
-    # Manual Speed Limit Assist is a feature that replaces non-adaptive cruise control on EV CAN FD platforms.
-    # It limits the vehicle speed, overridable by pressing the accelerator past a certain point.
-    # The car will brake, but does not respect positive acceleration commands in this mode
-    # TODO: find this message on ICE & HYBRID cars + cruise control signals (if exists)
     if self.CP.flags & HyundaiFlags.EV:
       ret.cruiseState.nonAdaptive = cp.vl["MANUAL_SPEED_LIMIT_ASSIST"]["MSLA_ENABLED"] == 1
 
@@ -325,7 +303,7 @@ class CarState(CarStateBase):
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     self.lda_button = cp.vl[self.cruise_btns_msg_canfd]["LDA_BTN"]
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
-    ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
+    ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0
 
     if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
       self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT
@@ -334,19 +312,13 @@ class CarState(CarStateBase):
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
                         *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
-
     ret.blockPcmEnable = not self.recent_button_interaction()
-
     return ret
 
   def get_can_parsers_canfd(self, CP):
     msgs = []
     if not (CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS):
-      # TODO: this can be removed once we add dynamic support to vl_all
-      msgs += [
-        # this message is 50Hz but the ECU frequently stops transmitting for ~0.5s
-        ("CRUISE_BUTTONS", 1)
-      ]
+      msgs += [("CRUISE_BUTTONS", 1)]
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], msgs, CanBus(CP).ECAN),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CanBus(CP).CAM),
