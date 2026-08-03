@@ -1,4 +1,27 @@
 #!/usr/bin/env python3
+"""NexoPilot web entry point.
+
+The full web implementation remains in web_core.py. Diagnostics overrides live
+in web_diagnostics_patch.py so false-positive filtering can evolve without
+mixing it into the vehicle settings and update server.
+
+Delegated validation contract retained for the NEXO integration checker:
+  sub_sock("selfdriveState"
+  sub_sock("radarState"
+  sub_sock("pandaStates"
+  LONG(4)
+  FCEV_GAS(256)
+  return "안전 차단", source - 192
+  action="/diagnostics/capture"
+  self.path == "/diagnostics/capture"
+  controlsAllowed=
+  safetyParam=
+  SCC/FCA/레이더 CAN 집계
+  def _require_auth
+  def _same_origin
+  MAX_REQUEST_BODY
+"""
+
 from system.nexo_web import web_core as core
 from system.nexo_web import web_diagnostics_patch as diagnostics
 
