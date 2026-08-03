@@ -106,6 +106,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
   main_mode_acc = cruise_available
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
+  scc14_enabled = acc_enabled
   stop_req = 1 if acc_enabled and stopping else 0
 
   lead_visible = hud_control.leadVisible
@@ -155,7 +156,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "ComfortBandLower": 0.0,
     "JerkUpperLimit": upper_jerk,
     "JerkLowerLimit": upper_jerk,
-    "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 4,
+    "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": obj_gap,
   })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
