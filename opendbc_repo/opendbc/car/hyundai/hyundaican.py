@@ -33,7 +33,7 @@ def create_lkas11(packer, frame, CP, apply_torque, steer_req,
   values["CF_Lkas_LdwsRHWarning"] = right_lane_depart
   values["CR_Lkas_StrToqReq"] = apply_torque
   values["CF_Lkas_ActToi"] = steer_req
-  values["CF_Lkas_ToiFlt"] = torque_fault  # seems to allow actuation on CR_Lkas_StrToqReq
+  values["CF_Lkas_ToiFlt"] = torque_fault
   values["CF_Lkas_MsgCount"] = frame % 0x10
 
   if CP.carFingerprint in (CAR.HYUNDAI_SONATA, CAR.HYUNDAI_PALISADE, CAR.KIA_NIRO_EV, CAR.KIA_NIRO_HEV_2021, CAR.KIA_NIRO_PHEV_2022, CAR.HYUNDAI_SANTA_FE,
@@ -45,7 +45,6 @@ def create_lkas11(packer, frame, CP, apply_torque, steer_req,
                            CAR.HYUNDAI_NEXO_1ST_GEN):
     values["CF_Lkas_LdwsActivemode"] = int(left_lane) + (int(right_lane) << 1)
     values["CF_Lkas_LdwsOpt_USM"] = 2
-
     values["CF_Lkas_FcwOpt_USM"] = 2 if enabled else 1
     values["CF_Lkas_SysWarning"] = 4 if sys_warning else 0
 
@@ -121,11 +120,9 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
     "SCCInfoDisplay": 0,
-    # NEXOdriveAI keeps the cluster-facing radar object state valid even when
-    # no lead is selected. The actual object distance and relative speed remain
-    # zero, so this preserves the normal SCC/FCA status without inventing a lead.
-    "ObjValid": 1 if is_nexo else 1 if lead_visible else 0,
-    "ACC_ObjStatus": 1 if is_nexo else 1 if lead_visible else 0,
+    # Match Carrot: object validity follows the actual selected radar lead.
+    "ObjValid": 1 if lead_visible else 0,
+    "ACC_ObjStatus": 1 if lead_visible else 0,
     "ACC_ObjLatPos": 0,
     "ACC_ObjRelSpd": lead_rel_speed,
     "ACC_ObjDist": lead_distance,
@@ -145,7 +142,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   })
 
-  if not use_fca and not is_nexo:
+  if not use_fca:
     scc12_values["CF_VSM_ConfMode"] = 1
     scc12_values["AEB_Status"] = 1
 
@@ -169,7 +166,8 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 0 if is_nexo else 1,
+      # Match Carrot's non-camera SCC status message.
+      "FCA_Status": 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
@@ -189,10 +187,10 @@ def create_acc_opt(packer, CP):
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
-    is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 0 if is_nexo else 1,
+      # Match Carrot's standard FCA user-setting status.
+      "FCA_USM": 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
