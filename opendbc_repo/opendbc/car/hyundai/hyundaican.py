@@ -167,8 +167,9 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   }
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
-  # Carrot sends the FCA status stream together with SCC on USE_FCA vehicles.
-  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # NEXO keeps its stock FCA stream alive. Do not inject a second FCA11 status
+  # frame with AEB-disabled values while the factory FCA ECU is still present.
+  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
@@ -184,6 +185,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
+  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -192,7 +194,8 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Preserve the factory NEXO FCA12 settings instead of advertising AEB off.
+  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
       "FCA_USM": 1,
