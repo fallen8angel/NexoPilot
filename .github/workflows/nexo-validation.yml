@@ -41,6 +41,9 @@ jobs:
             selfdrive/controls/lib/longitudinal_planner.py \
             system/nexo_web/web.py
 
+      - name: Test NEXO longitudinal init
+        run: PYTHONPATH=opendbc_repo python -m unittest opendbc.car.hyundai.tests.test_nexo_init
+
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
 
@@ -90,6 +93,13 @@ jobs:
               "self.nexo_acc_fault_frames" not in carstate and
               'ret.accFaulted = False' in carstate))
 
+          checks.append(("NEXO stock SCC suppression verification",
+              "NEXO_STOCK_SCC_ADDRS" in interface and
+              "def _nexo_stock_scc_active" in interface and
+              'raise RuntimeError("NEXO stock SCC communication could not be disabled")' in interface and
+              'raise RuntimeError("NEXO stock SCC remained active")' in interface and
+              "STEP 1B verify stock SCC traffic is silent" in interface))
+
           checks.append(("Carrot direct NEXO SCC generation",
               "nexo_stock_scc_templates_ready" not in hyundaican and
               "copy.copy(stock_scc11)" not in hyundaican and
@@ -106,10 +116,9 @@ jobs:
               '"ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0' in hyundaican and
               '"ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4' in hyundaican))
 
-          checks.append(("Carrot SCC/FCA status contract",
-              '"ObjValid": 1 if lead_visible else 0' in hyundaican and
-              '"ACC_ObjStatus": 1 if lead_visible else 0' in hyundaican and
-              'if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):' in hyundaican and
+          checks.append(("NEXO stock FCA preservation",
+              'if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):' in hyundaican and
+              'if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):' in hyundaican and
               '"FCA_Status": 1' in hyundaican and
               '"FCA_USM": 1' in hyundaican))
 
@@ -165,12 +174,13 @@ jobs:
               "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in interface and
               "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" not in interface))
 
-          checks.append(("Carrot NEXO disable-then-radar sequence",
+          checks.append(("Verified NEXO disable-then-radar sequence",
               interface.index("disabled = disable_ecu") <
+              interface.index("stock_scc_active = _nexo_stock_scc_active", interface.index("disabled = disable_ecu")) <
               interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) and
               "disabled_after_tracks" not in interface and
               "STEP 3 re-request" not in interface and
-              "DONE Carrot-style disable-then-radar sequence" in interface and
+              "DONE verified disable-then-radar sequence" in interface and
               "retries=40" in interface and
               'raise RuntimeError("NEXO radar track activation failed")' in interface))
 
