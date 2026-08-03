@@ -26,7 +26,6 @@ def _trace_nexo_long_init(message: str, reset: bool = False) -> None:
     pass
 
 
-# Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
 
 
@@ -42,7 +41,6 @@ class CarInterface(CarInterfaceBase):
     ret.brand = "hyundai"
 
     if ret.flags & HyundaiFlags.CANFD:
-      # Shared configuration for CAN-FD cars
       cam_can = CanBus(None, fingerprint).CAM
       lka_steering = 0x50 in fingerprint[cam_can] or 0x110 in fingerprint[cam_can]
       CAN = CanBus(None, fingerprint, lka_steering)
@@ -87,7 +85,6 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CAMERA_SCC.value
 
     else:
-      # Shared configuration for non CAN-FD cars
       ret.alphaLongitudinalAvailable = not (ret.flags & (HyundaiFlags.LEGACY | HyundaiFlags.UNSUPPORTED_LONGITUDINAL))
       ret.enableBsm = 0x58b in fingerprint[0]
 
@@ -108,7 +105,6 @@ class CarInterface(CarInterfaceBase):
       if 0x391 in fingerprint[0]:
         ret.flags |= HyundaiFlags.HAS_LDA_BUTTON.value
 
-    # Common lateral control setup
     ret.centerToFront = ret.wheelbase * 0.4
     ret.steerActuatorDelay = 0.1
     ret.steerLimitTimer = 0.4
@@ -121,8 +117,6 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_LIMITS_2.value
       ret.dashcamOnly = True
 
-    # Common longitudinal control setup. NEXO radar tracks are silent until
-    # DID 0x0142 is written, so fingerprinting must not require 0x500 first.
     radar_dbc_available = Bus.radar in DBC[ret.carFingerprint]
     if candidate == CAR.HYUNDAI_NEXO_1ST_GEN:
       ret.radarUnavailable = not radar_dbc_available
@@ -130,10 +124,6 @@ class CarInterface(CarInterfaceBase):
       ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or not radar_dbc_available
 
     is_nexo = candidate == CAR.HYUNDAI_NEXO_1ST_GEN
-    # Keep the user's longitudinal toggle authoritative. CarParams and Panda
-    # safety remain in lockstep because LONG is added below only when this is
-    # true. With the toggle off, NEXO keeps stock SCC and starts in lateral-only
-    # mode without running radar-disable or radar-track configuration.
     ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
     ret.startingState = True
@@ -141,7 +131,6 @@ class CarInterface(CarInterfaceBase):
     ret.startAccel = 1.0
     ret.longitudinalActuatorDelay = 0.5
 
-    # NEXOdriveAI longitudinal tuning and stop/start behavior.
     if is_nexo:
       ret.longitudinalTuning.kpBP = [0., 5. * CV.KPH_TO_MS, 10. * CV.KPH_TO_MS,
                                     30. * CV.KPH_TO_MS, 130. * CV.KPH_TO_MS]
@@ -174,7 +163,6 @@ class CarInterface(CarInterfaceBase):
 
   @staticmethod
   def init(CP, can_recv, can_send, communication_control=None):
-    # 0x80 silences response
     if communication_control is None:
       communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
                                      0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX,
@@ -189,14 +177,9 @@ class CarInterface(CarInterfaceBase):
       is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
       if is_nexo and disabling_normal_comms:
-        _trace_nexo_long_init(f"START simple long init bus={bus} addr=0x{addr:x}", reset=True)
-
-        # Proven NEXOdriveAI/Carrot order: request stock SCC suppression first,
-        # then enable the MANDO radar tracks. A missing communication-control
-        # acknowledgement is logged but does not block the radar request.
+        _trace_nexo_long_init(f"START Carrot-style long init bus={bus} addr=0x{addr:x}", reset=True)
         _trace_nexo_long_init("STEP 1 request stock SCC communication suppression")
-        disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
-                               com_cont_req=communication_control)
+        disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
         _trace_nexo_long_init(f"STEP 1 request completed={disabled}")
         if not disabled:
           carlog.warning(f"NEXO stock SCC communication-control was not acknowledged on bus {bus}")
@@ -205,9 +188,6 @@ class CarInterface(CarInterfaceBase):
         tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=40)
         _trace_nexo_long_init(f"STEP 2 radar-track request completed={tracks_enabled}")
         if not tracks_enabled:
-          # Never continue openpilot longitudinal control without radar points.
-          # Restore stock SCC and let card's existing recovery reboot into the
-          # stock-cruise/lateral-only path.
           enable_communication = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
                                         0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
                                         uds.MESSAGE_TYPE.NORMAL])
@@ -215,20 +195,14 @@ class CarInterface(CarInterfaceBase):
           _trace_nexo_long_init("FAIL radar tracks; requested stock communication restore")
           raise RuntimeError("NEXO radar track activation failed")
 
-        # The radar DID write can change the ECU diagnostic state. Reapply the
-        # stock-SCC suppression once, but do not gate long control on a separate
-        # 0.35-second CAN-silence test that rejected otherwise working cars.
-        _trace_nexo_long_init("STEP 3 re-request stock SCC suppression after radar DID write")
-        disabled_after_tracks = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
-                                            com_cont_req=communication_control)
-        _trace_nexo_long_init(f"STEP 3 request completed={disabled_after_tracks}")
-        if not disabled_after_tracks:
-          carlog.warning(f"NEXO final stock SCC communication-control was not acknowledged on bus {bus}")
-        _trace_nexo_long_init("DONE simple radar initialization; longitudinal safety mode may start")
+        # Match the working Carrot sequence exactly: do not issue a second
+        # communication-control request after writing radar DID 0x0142. On NEXO
+        # that second request can drop the cluster-facing FCA status and light
+        # the forward-collision warning even though radar tracks are healthy.
+        _trace_nexo_long_init("DONE Carrot-style disable-then-radar sequence")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
-    # for blinkers
     if CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
       disable_ecu(can_recv, can_send, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=communication_control)
 
