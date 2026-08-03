@@ -6,6 +6,18 @@ from opendbc.car.hyundai.values import CAR, HyundaiFlags
 hyundai_checksum = mk_crc8_fun(CRC8J1850, init_crc=0xFD, xor_out=0xDF)
 
 
+NEXO_SCC11_REQUIRED = ("MainMode_ACC", "TauGapSet", "AliveCounterACC")
+NEXO_SCC12_REQUIRED = ("ACCMode", "CR_VSM_Alive")
+NEXO_SCC14_REQUIRED = ("ACCMode",)
+
+
+def nexo_stock_scc_templates_ready(stock_scc11, stock_scc12, stock_scc14):
+  """Only start NEXO longitudinal messaging after complete live stock templates exist."""
+  return (all(key in (stock_scc11 or {}) for key in NEXO_SCC11_REQUIRED) and
+          all(key in (stock_scc12 or {}) for key in NEXO_SCC12_REQUIRED) and
+          all(key in (stock_scc14 or {}) for key in NEXO_SCC14_REQUIRED))
+
+
 def create_lkas11(packer, frame, CP, apply_torque, steer_req,
                   torque_fault, lkas11, sys_warning, sys_state, enabled,
                   left_lane, right_lane,
@@ -104,6 +116,12 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
                         cruise_available=True, vehicle_cruise_enabled=True, stock_scc11=None, stock_scc12=None, stock_scc14=None):
   commands = []
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
+
+  # Never synthesize NEXO SCC frames from empty/default dictionaries. Wait for
+  # live stock SCC11/SCC12/SCC14 templates so unknown platform bits are kept.
+  if is_nexo and not nexo_stock_scc_templates_ready(stock_scc11, stock_scc12, stock_scc14):
+    return commands
+
   main_mode_acc = cruise_available
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
   scc14_enabled = acc_enabled
@@ -114,7 +132,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
 
-  scc11_values = copy.copy(stock_scc11) if is_nexo and stock_scc11 else {}
+  scc11_values = copy.copy(stock_scc11) if is_nexo else {}
   scc11_values.update({
     "MainMode_ACC": 1 if main_mode_acc else 0,
     "TauGapSet": hud_control.leadDistanceBars,
@@ -130,7 +148,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   })
   commands.append(packer.make_can_msg("SCC11", 0, scc11_values))
 
-  scc12_values = copy.copy(stock_scc12) if is_nexo and stock_scc12 else {}
+  scc12_values = copy.copy(stock_scc12) if is_nexo else {}
   scc12_values.update({
     "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0,
     "StopReq": stop_req,
@@ -150,7 +168,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   scc12_values["CR_VSM_ChkSum"] = 0x10 - sum(sum(divmod(i, 16)) for i in scc12_dat) % 0x10
   commands.append(packer.make_can_msg("SCC12", 0, scc12_values))
 
-  scc14_values = copy.copy(stock_scc14) if is_nexo and stock_scc14 else {}
+  scc14_values = copy.copy(stock_scc14) if is_nexo else {}
   scc14_values.update({
     "ComfortBandUpper": 0.0,
     "ComfortBandLower": 0.0,
@@ -161,7 +179,9 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
-  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Stock NEXO FCA11 remains present on the vehicle bus. Do not create a second
+  # counter/checksum stream. Other Hyundai platforms keep the standard path.
+  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
@@ -177,6 +197,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
+  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -185,7 +206,8 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Preserve NEXO's live stock FCA12 setting/status stream.
+  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
       "FCA_USM": 1,
