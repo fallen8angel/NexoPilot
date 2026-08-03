@@ -120,7 +120,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
     "SCCInfoDisplay": 0,
-    # Match Carrot: object validity follows the actual selected radar lead.
     "ObjValid": 1 if lead_visible else 0,
     "ACC_ObjStatus": 1 if lead_visible else 0,
     "ACC_ObjLatPos": 0,
@@ -161,12 +160,14 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
-  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # NEXO continues to provide its stock FCA11 on the vehicle bus even while
+  # stock SCC longitudinal control is suppressed. Sending a second synthetic
+  # FCA11 creates conflicting status/counter/checksum streams at the cluster.
+  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      # Match Carrot's non-camera SCC status message.
       "FCA_Status": 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
@@ -178,6 +179,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
+  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -186,10 +188,11 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Preserve NEXO's stock FCA12 user-setting/status message. A synthetic FCA12
+  # duplicates the still-live factory stream and can trigger the FCA warning.
+  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
-      # Match Carrot's standard FCA user-setting status.
       "FCA_USM": 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
