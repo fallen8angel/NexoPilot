@@ -83,7 +83,6 @@ jobs:
               'ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1' in carstate and
               "self.nexo_cruise_enabled" not in carstate and
               "self.nexo_cruise_available" not in carstate and
-              "NEXO_CONTROLS_READY_FRAMES" not in carstate and
               'get_bool("ControlsReady")' not in carstate))
 
           checks.append(("NEXO expected ACCEnable state",
@@ -91,26 +90,36 @@ jobs:
               "self.nexo_acc_fault_frames" not in carstate and
               'ret.accFaulted = False' in carstate))
 
-          checks.append(("NEXO SCC activation sequence",
-              "CS.out.cruiseState.available, CS.out.cruiseState.enabled" in controller and
-              "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
-              "scc14_enabled = acc_enabled" in hyundaican))
+          checks.append(("Carrot direct NEXO SCC generation",
+              "nexo_stock_scc_templates_ready" not in hyundaican and
+              "copy.copy(stock_scc11)" not in hyundaican and
+              "copy.copy(stock_scc12)" not in hyundaican and
+              "copy.copy(stock_scc14)" not in hyundaican and
+              "del stock_scc11, stock_scc12, stock_scc14" in hyundaican and
+              'scc11_values = {' in hyundaican and
+              'scc12_values = {' in hyundaican and
+              'scc14_values = {' in hyundaican))
 
-          checks.append(("NEXO SCC template ownership",
-              'if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and not self.CP.openpilotLongitudinalControl:' in carstate and
-              'self.scc11 = copy.copy(cp_cruise.vl["SCC11"])' in carstate and
-              'self.scc12 = copy.copy(cp_cruise.vl["SCC12"])' in carstate and
-              'self.scc14 = copy.copy(cp_cruise.vl["SCC14"])' in carstate and
-              "CS.scc11, CS.scc12, CS.scc14" in controller and
-              "copy.copy(stock_scc11) if is_nexo and stock_scc11 else {}" in hyundaican and
-              "copy.copy(stock_scc12) if is_nexo and stock_scc12 else {}" in hyundaican and
-              "copy.copy(stock_scc14) if is_nexo and stock_scc14 else {}" in hyundaican))
+          checks.append(("NEXO inactive cluster status",
+              "main_mode_acc = (enabled or vehicle_cruise_enabled) if is_nexo else cruise_available" in hyundaican and
+              "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
+              '"ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0' in hyundaican and
+              '"ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4' in hyundaican))
 
           checks.append(("Carrot SCC/FCA status contract",
               '"ObjValid": 1 if lead_visible else 0' in hyundaican and
               '"ACC_ObjStatus": 1 if lead_visible else 0' in hyundaican and
+              'if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):' in hyundaican and
               '"FCA_Status": 1' in hyundaican and
               '"FCA_USM": 1' in hyundaican))
+
+          checks.append(("NEXO longitudinal send cadence",
+              "if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:" in controller and
+              "hyundaican.create_acc_commands" in controller and
+              "if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:" in controller and
+              "hyundaican.create_acc_opt" in controller and
+              "if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl:" in controller and
+              "hyundaican.create_frt_radar_opt" in controller))
 
           checks.append(("NEXO lead data path",
               "longitudinalPlan.leadDistance = lead_one.dRel if lead_one.status else 0.0" in planner and
