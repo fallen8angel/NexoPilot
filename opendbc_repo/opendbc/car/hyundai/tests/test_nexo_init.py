@@ -14,7 +14,7 @@ class TestNexoLongitudinalInit(unittest.TestCase):
       carFingerprint=CAR.HYUNDAI_NEXO_1ST_GEN,
     )
 
-  def test_uses_simple_disable_radar_disable_sequence(self):
+  def test_uses_carrot_disable_then_radar_sequence(self):
     calls = []
 
     def disable(*args, **kwargs):
@@ -29,27 +29,16 @@ class TestNexoLongitudinalInit(unittest.TestCase):
          patch("opendbc.car.hyundai.interface.enable_radar_tracks", side_effect=enable) as radar_enable:
       CarInterface.init(self.CP, object(), object())
 
-    self.assertEqual(["disable", "enable", "disable"], calls)
+    self.assertEqual(["disable", "enable"], calls)
     self.assertEqual(40, radar_enable.call_args.kwargs["retries"])
 
-  def test_missing_initial_disable_ack_does_not_block_radar_activation(self):
-    disable_results = iter((False, True))
-
-    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=lambda *args, **kwargs: next(disable_results)) as disable, \
+  def test_missing_disable_ack_does_not_block_radar_activation(self):
+    with patch("opendbc.car.hyundai.interface.disable_ecu", return_value=False) as disable, \
          patch("opendbc.car.hyundai.interface.enable_radar_tracks", return_value=True) as enable:
       CarInterface.init(self.CP, object(), object())
 
-    self.assertEqual(2, disable.call_count)
+    disable.assert_called_once()
     enable.assert_called_once()
-
-  def test_missing_final_disable_ack_does_not_stop_initialized_radar(self):
-    disable_results = iter((True, False))
-
-    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=lambda *args, **kwargs: next(disable_results)) as disable, \
-         patch("opendbc.car.hyundai.interface.enable_radar_tracks", return_value=True):
-      CarInterface.init(self.CP, object(), object())
-
-    self.assertEqual(2, disable.call_count)
 
   def test_radar_failure_restores_stock_scc_before_safe_recovery(self):
     calls = []
