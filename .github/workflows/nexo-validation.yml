@@ -81,18 +81,18 @@ jobs:
           checks.append(("gear",
               "P=0, D=5, N=6, R=7" in carstate))
 
-          checks.append(("cruise",
+          checks.append(("NEXO cruise after stock SCC suppression",
+              'ret.cruiseState.available = True' in carstate and
               'ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1' in carstate and
-              'ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0' in carstate and
               "self.nexo_cruise_enabled" not in carstate and
               "self.nexo_cruise_available" not in carstate and
               "NEXO_CONTROLS_READY_FRAMES" not in carstate and
               'get_bool("ControlsReady")' not in carstate))
 
-          checks.append(("NEXO ACC fault debounce",
-              "NEXO_ACC_FAULT_DEBOUNCE_FRAMES = 100" in carstate and
-              "self.nexo_acc_fault_frames" in carstate and
-              "ret.accFaulted = self.nexo_acc_fault_frames >= NEXO_ACC_FAULT_DEBOUNCE_FRAMES" in carstate))
+          checks.append(("NEXO expected ACCEnable state",
+              "NEXO_ACC_FAULT_DEBOUNCE_FRAMES" not in carstate and
+              "self.nexo_acc_fault_frames" not in carstate and
+              'ret.accFaulted = False' in carstate))
 
           controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
           hyundaican = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
@@ -101,7 +101,8 @@ jobs:
               "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
               "scc14_enabled = acc_enabled" in hyundaican))
 
-          checks.append(("NEXO stock SCC payload preservation",
+          checks.append(("NEXO SCC template ownership",
+              'if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and not self.CP.openpilotLongitudinalControl:' in carstate and
               'self.scc11 = copy.copy(cp_cruise.vl["SCC11"])' in carstate and
               'self.scc12 = copy.copy(cp_cruise.vl["SCC12"])' in carstate and
               'self.scc14 = copy.copy(cp_cruise.vl["SCC14"])' in carstate and
