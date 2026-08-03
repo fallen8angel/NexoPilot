@@ -106,16 +106,17 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
   main_mode_acc = cruise_available
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
-  scc14_enabled = acc_enabled
+  stop_req = 1 if acc_enabled and stopping else 0
 
   lead_visible = hud_control.leadVisible
   lead_distance = max(0.0, min(float(hud_control.leadDistance), 204.7)) if lead_visible else 0.0
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
+  obj_dist_stat = 0 if obj_gap == 0 else 2 if lead_rel_speed < -0.2 else 1
 
   scc11_values = copy.copy(stock_scc11) if is_nexo and stock_scc11 else {}
   scc11_values.update({
-    "MainMode_ACC": main_mode_acc,
+    "MainMode_ACC": 1 if main_mode_acc else 0,
     "TauGapSet": hud_control.leadDistanceBars,
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
@@ -132,8 +133,8 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   scc12_values = copy.copy(stock_scc12) if is_nexo and stock_scc12 else {}
   scc12_values.update({
     "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0,
-    "StopReq": 1 if acc_enabled and stopping else 0,
-    "aReqRaw": accel if acc_enabled else 0.0,
+    "StopReq": stop_req,
+    "aReqRaw": 0.0 if stop_req else accel if acc_enabled else 0.0,
     "aReqValue": accel if acc_enabled else 0.0,
     "ACCFailInfo": 0,
     "TakeOverReq": 0,
@@ -154,16 +155,14 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "ComfortBandUpper": 0.0,
     "ComfortBandLower": 0.0,
     "JerkUpperLimit": upper_jerk,
-    "JerkLowerLimit": 5.0,
-    "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
+    "JerkLowerLimit": upper_jerk,
+    "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 4,
     "ObjGap": obj_gap,
+    "ObjDistStat": obj_dist_stat,
   })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
-  # NEXO continues to provide its stock FCA11 on the vehicle bus even while
-  # stock SCC longitudinal control is suppressed. Sending a second synthetic
-  # FCA11 creates conflicting status/counter/checksum streams at the cluster.
-  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
@@ -179,7 +178,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
-  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -188,9 +186,7 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # Preserve NEXO's stock FCA12 user-setting/status message. A synthetic FCA12
-  # duplicates the still-live factory stream and can trigger the FCA warning.
-  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
       "FCA_USM": 1,
