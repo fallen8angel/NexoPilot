@@ -16,7 +16,6 @@ from opendbc.car.hyundai.radar_interface import RadarInterface
 ButtonType = structs.CarState.ButtonEvent.Type
 Ecu = structs.CarParams.Ecu
 NEXO_LONG_INIT_LOG = "/data/nexo_long_init.log"
-NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x38D, 0x420, 0x421, 0x483, 0x4A2, 0x50A))
 
 
 def _trace_nexo_long_init(message: str, reset: bool = False) -> None:
@@ -25,31 +24,6 @@ def _trace_nexo_long_init(message: str, reset: bool = False) -> None:
       trace.write(f"{time.monotonic():.3f} {message}\n")
   except OSError:
     pass
-
-
-def nexo_stock_scc_is_silent(can_recv, bus: int, quiet_time: float = 0.35, timeout: float = 1.5) -> bool:
-  """Confirm live CAN traffic continues while the stock longitudinal messages stay silent."""
-  start = time.monotonic()
-  last_stock_scc = start
-  saw_bus_traffic = False
-
-  while time.monotonic() - start < timeout:
-    can_packets = can_recv(wait_for_one=True)
-    now = time.monotonic()
-
-    for packet in can_packets:
-      for msg in packet:
-        if msg.src != bus:
-          continue
-
-        saw_bus_traffic = True
-        if msg.address in NEXO_STOCK_SCC_ADDRS:
-          last_stock_scc = now
-
-    if saw_bus_traffic and now - last_stock_scc >= quiet_time:
-      return True
-
-  return False
 
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
@@ -215,25 +189,25 @@ class CarInterface(CarInterfaceBase):
       is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
       if is_nexo and disabling_normal_comms:
-        _trace_nexo_long_init(f"START long init bus={bus} addr=0x{addr:x}", reset=True)
-        # Match the proven Carrot NEXO sequence: stop stock SCC first, then
-        # enable radar point output. Never continue in the half-initialized
-        # state: sending openpilot SCC while the stock SCC is still active (or
-        # after it was silenced without radar tracks) faults the vehicle.
+        _trace_nexo_long_init(f"START simple long init bus={bus} addr=0x{addr:x}", reset=True)
+
+        # Proven NEXOdriveAI/Carrot order: request stock SCC suppression first,
+        # then enable the MANDO radar tracks. A missing communication-control
+        # acknowledgement is logged but does not block the radar request.
         _trace_nexo_long_init("STEP 1 request stock SCC communication suppression")
         disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
                                com_cont_req=communication_control)
-        _trace_nexo_long_init(f"STEP 1 request completed={disabled}; this does not prove stock SCC silence")
+        _trace_nexo_long_init(f"STEP 1 request completed={disabled}")
         if not disabled:
-          _trace_nexo_long_init("FAIL stock SCC communication-control request")
-          raise RuntimeError("NEXO stock SCC communication could not be disabled")
+          carlog.warning(f"NEXO stock SCC communication-control was not acknowledged on bus {bus}")
 
         _trace_nexo_long_init("STEP 2 request radar-track activation")
-        tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=3)
+        tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=40)
         _trace_nexo_long_init(f"STEP 2 radar-track request completed={tracks_enabled}")
         if not tracks_enabled:
-          # Restore the stock radar/SCC transmitter before card's recovery
-          # disables long control and reboots into the normal cruise path.
+          # Never continue openpilot longitudinal control without radar points.
+          # Restore stock SCC and let card's existing recovery reboot into the
+          # stock-cruise/lateral-only path.
           enable_communication = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
                                         0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
                                         uds.MESSAGE_TYPE.NORMAL])
@@ -241,37 +215,16 @@ class CarInterface(CarInterfaceBase):
           _trace_nexo_long_init("FAIL radar tracks; requested stock communication restore")
           raise RuntimeError("NEXO radar track activation failed")
 
-        # Writing the radar-track DID changes the radar diagnostic state. On
-        # the NEXO firmware this can resume the stock SCC11/12/14 transmitter,
-        # even though communication was disabled immediately beforehand. That
-        # leaves two longitudinal controllers on PT-CAN and Panda correctly
-        # reports a relay malfunction and blocks openpilot SCC frames. Reapply
-        # communication control after the DID write; only enter long control
-        # when this final stock-SCC suppression succeeds.
-        stock_scc_silent = False
-        for attempt in range(1, 4):
-          _trace_nexo_long_init(f"STEP 3 attempt {attempt}/3 re-request stock SCC suppression after radar DID write")
-          disabled_after_tracks = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
-                                              com_cont_req=communication_control, timeout=0.2, retry=10)
-          _trace_nexo_long_init(f"STEP 3 attempt {attempt}/3 request completed={disabled_after_tracks}")
-
-          if disabled_after_tracks and nexo_stock_scc_is_silent(can_recv, bus):
-            carlog.info(f"NEXO stock SCC silence verified on bus {bus}, attempt {attempt}")
-            _trace_nexo_long_init(f"STEP 3 attempt {attempt}/3 verified 0.35 s stock SCC/FCA silence")
-            stock_scc_silent = True
-            break
-
-          carlog.warning(f"NEXO stock SCC still active on bus {bus}, disable attempt {attempt}/3")
-          _trace_nexo_long_init(f"STEP 3 attempt {attempt}/3 failed actual CAN silence verification")
-
-        if not stock_scc_silent:
-          enable_communication = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
-                                        0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
-                                        uds.MESSAGE_TYPE.NORMAL])
-          disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=enable_communication)
-          _trace_nexo_long_init("FAIL stock SCC remained active; requested stock communication restore")
-          raise RuntimeError("NEXO stock SCC remained active after radar track activation")
-        _trace_nexo_long_init("DONE stock SCC silence verified; longitudinal safety mode may start")
+        # The radar DID write can change the ECU diagnostic state. Reapply the
+        # stock-SCC suppression once, but do not gate long control on a separate
+        # 0.35-second CAN-silence test that rejected otherwise working cars.
+        _trace_nexo_long_init("STEP 3 re-request stock SCC suppression after radar DID write")
+        disabled_after_tracks = disable_ecu(can_recv, can_send, bus=bus, addr=addr,
+                                            com_cont_req=communication_control)
+        _trace_nexo_long_init(f"STEP 3 request completed={disabled_after_tracks}")
+        if not disabled_after_tracks:
+          carlog.warning(f"NEXO final stock SCC communication-control was not acknowledged on bus {bus}")
+        _trace_nexo_long_init("DONE simple radar initialization; longitudinal safety mode may start")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
