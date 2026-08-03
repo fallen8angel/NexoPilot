@@ -4,16 +4,23 @@ on:
   push:
     branches:
       - NEXO
+      - "agent/**"
   pull_request:
     branches:
       - NEXO
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: nexo-validation-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-nexo-integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Checkout
@@ -24,183 +31,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Compile Python
-        run: |
-          python -m py_compile \
-            opendbc_repo/opendbc/car/hyundai/values.py \
-            opendbc_repo/opendbc/car/hyundai/carstate.py \
-            opendbc_repo/opendbc/car/hyundai/carcontroller.py \
-            opendbc_repo/opendbc/car/hyundai/hyundaican.py \
-            opendbc_repo/opendbc/car/hyundai/interface.py \
-            opendbc_repo/opendbc/car/hyundai/radar_interface.py \
-            opendbc_repo/opendbc/car/hyundai/radar_tracks.py \
-            opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py \
-            selfdrive/car/card.py \
-            selfdrive/car/tests/test_card.py \
-            selfdrive/controls/controlsd.py \
-            selfdrive/controls/lib/longitudinal_planner.py \
-            system/nexo_web/web.py
+      - name: Check commit whitespace
+        run: git diff-tree --check --no-commit-id --root -r HEAD
+
+      - name: Check NEXO integration
+        run: python tools/check_nexo_integration.py
 
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
-
-      - name: Check NEXO integration
-        shell: python
-        run: |
-          from pathlib import Path
-          import sys
-
-          checks = []
-
-          def read(path):
-              p = Path(path)
-              if not p.exists():
-                  return ""
-              return p.read_text(encoding="utf-8", errors="ignore")
-
-          values = read("opendbc_repo/opendbc/car/hyundai/values.py")
-          carstate = read("opendbc_repo/opendbc/car/hyundai/carstate.py")
-          radar = read("opendbc_repo/opendbc/car/hyundai/radar_interface.py")
-          radar_tracks = read("opendbc_repo/opendbc/car/hyundai/radar_tracks.py")
-          card = read("selfdrive/car/card.py")
-          launch = read("launch_openpilot.sh")
-          web = read("system/nexo_web/web.py")
-          controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
-          hyundaican = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
-          planner = read("selfdrive/controls/lib/longitudinal_planner.py")
-          controls = read("selfdrive/controls/controlsd.py")
-          log_schema = read("cereal/log.capnp")
-          car_schema = read("opendbc_repo/opendbc/car/car.capnp")
-          interface = read("opendbc_repo/opendbc/car/hyundai/interface.py")
-
-          checks.append(("FCEV RADAR", "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values))
-          checks.append(("tire stiffness", "tireStiffnessFactor=0.385" in values))
-          checks.append(("speed", "minEnableSpeed=10 * CV.KPH_TO_MS" in values))
-          checks.append(("gear", "P=0, D=5, N=6, R=7" in carstate))
-
-          checks.append(("NEXO cruise after stock SCC suppression",
-              'ret.cruiseState.available = True' in carstate and
-              'ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1' in carstate and
-              "self.nexo_cruise_enabled" not in carstate and
-              "self.nexo_cruise_available" not in carstate and
-              'get_bool("ControlsReady")' not in carstate))
-
-          checks.append(("NEXO expected ACCEnable state",
-              "NEXO_ACC_FAULT_DEBOUNCE_FRAMES" not in carstate and
-              "self.nexo_acc_fault_frames" not in carstate and
-              'ret.accFaulted = False' in carstate))
-
-          checks.append(("NEXO stock SCC suppression verification",
-              "NEXO_STOCK_SCC_ADDRS" in interface and
-              "def _nexo_stock_scc_active" in interface and
-              'raise RuntimeError("NEXO stock SCC communication could not be disabled")' in interface and
-              'raise RuntimeError("NEXO stock SCC remained active")' in interface and
-              "STEP 1B verify stock SCC traffic is silent" in interface))
-
-          checks.append(("Carrot direct NEXO SCC generation",
-              "nexo_stock_scc_templates_ready" not in hyundaican and
-              "copy.copy(stock_scc11)" not in hyundaican and
-              "copy.copy(stock_scc12)" not in hyundaican and
-              "copy.copy(stock_scc14)" not in hyundaican and
-              "del stock_scc11, stock_scc12, stock_scc14" in hyundaican and
-              'scc11_values = {' in hyundaican and
-              'scc12_values = {' in hyundaican and
-              'scc14_values = {' in hyundaican))
-
-          checks.append(("NEXO inactive cluster status",
-              "main_mode_acc = (enabled or vehicle_cruise_enabled) if is_nexo else cruise_available" in hyundaican and
-              "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
-              '"ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0' in hyundaican and
-              '"ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4' in hyundaican))
-
-          checks.append(("NEXO stock FCA preservation",
-              'if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):' in hyundaican and
-              'if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):' in hyundaican and
-              '"FCA_Status": 1' in hyundaican and
-              '"FCA_USM": 1' in hyundaican))
-
-          checks.append(("NEXO longitudinal send cadence",
-              "if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:" in controller and
-              "hyundaican.create_acc_commands" in controller and
-              "if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:" in controller and
-              "hyundaican.create_acc_opt" in controller and
-              "if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl:" in controller and
-              "hyundaican.create_frt_radar_opt" in controller))
-
-          checks.append(("NEXO lead data path",
-              "longitudinalPlan.leadDistance = lead_one.dRel if lead_one.status else 0.0" in planner and
-              "longitudinalPlan.leadRelSpeed = lead_one.vRel if lead_one.status else 0.0" in planner and
-              "hudControl.leadDistance = self.sm['longitudinalPlan'].leadDistance" in controls and
-              "hudControl.leadRelSpeed = self.sm['longitudinalPlan'].leadRelSpeed" in controls and
-              "leadDistance @40 :Float32;" in log_schema and
-              "leadRelSpeed @41 :Float32;" in log_schema and
-              "leadDistance @11: Float32;" in car_schema and
-              "leadRelSpeed @12: Float32;" in car_schema))
-
-          checks.append(("NEXO MAIN passthrough", "main_button_events = []" in carstate))
-          checks.append(("NEXO radar 20 Hz", "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))
-
-          checks.append(("NEXO stock cruise recovery",
-              'params.put_bool("AlphaLongitudinalEnabled", False, block=True)' in card and
-              'params.put_bool("ExperimentalMode", False, block=True)' in card and
-              'params.put_bool("DoReboot", True, block=True)' in card and
-              '"CarParamsCache"' in card and
-              "recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)" in card))
-
-          checks.append(("current selfdrive diagnostics",
-              'sub_sock("selfdriveState"' in web and
-              'sub_sock("radarState"' in web and
-              'sub_sock("pandaStates"' in web and
-              "LONG(4)" in web and
-              "FCEV_GAS(256)" in web and
-              'return "안전 차단", source - 192' in web and
-              'sub_sock("controlsState"' not in web))
-
-          checks.append(("NEXO longitudinal blackbox diagnostics",
-              "def longitudinal_blackbox_output" in web and
-              'action="/diagnostics/capture"' in web and
-              'self.path == "/diagnostics/capture"' in web and
-              "controlsAllowed=" in web and
-              "safetyParam=" in web and
-              "SCC/FCA/레이더 CAN 집계" in web and
-              "def important_log_output" in web))
-
-          checks.append(("NEXO longitudinal toggle and Panda safety lockstep",
-              "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable" in interface and
-              "if ret.openpilotLongitudinalControl:" in interface and
-              "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in interface and
-              "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" not in interface))
-
-          checks.append(("Verified NEXO disable-then-radar sequence",
-              interface.index("disabled = disable_ecu") <
-              interface.index("stock_scc_active = _nexo_stock_scc_active", interface.index("disabled = disable_ecu")) <
-              interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) and
-              "disabled_after_tracks" not in interface and
-              "STEP 3 re-request" not in interface and
-              "DONE verified disable-then-radar sequence" in interface and
-              "retries=40" in interface and
-              'raise RuntimeError("NEXO radar track activation failed")' in interface))
-
-          checks.append(("NEXOdriveAI-style short radar retries",
-              "RADAR_QUERY_TIMEOUT = 0.1" in radar_tracks and
-              "RADAR_QUERY_TOTAL_TIMEOUT = 0.35" in radar_tracks and
-              "def enable_radar_tracks(can_recv, can_send, bus, retries=40)" in radar_tracks and
-              'b"\\x6e" + RADAR_TRACK_CONFIG_DID' in radar_tracks))
-
-          checks.append(("apply removed", "apply_nexo_ai.py" not in launch))
-          checks.append(("skip fw removed", "SKIP_FW_QUERY" not in launch))
-          checks.append(("auth", "def _require_auth" in web))
-          checks.append(("same origin", "def _same_origin" in web))
-          checks.append(("request body", "MAX_REQUEST_BODY" in web))
-          checks.append(("old patch removed", not Path("tools/apply_nexo_ai.py").exists()))
-
-          failed = False
-          for name, result in checks:
-              print(name, "OK" if result else "FAIL")
-              if not result:
-                  failed = True
-
-          if failed:
-              sys.exit(1)
-
-          print("NEXO validation PASS")
