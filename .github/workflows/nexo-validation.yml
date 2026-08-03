@@ -56,10 +56,7 @@ jobs:
               p = Path(path)
               if not p.exists():
                   return ""
-              return p.read_text(
-                  encoding="utf-8",
-                  errors="ignore"
-              )
+              return p.read_text(encoding="utf-8", errors="ignore")
 
           values = read("opendbc_repo/opendbc/car/hyundai/values.py")
           carstate = read("opendbc_repo/opendbc/car/hyundai/carstate.py")
@@ -68,18 +65,18 @@ jobs:
           card = read("selfdrive/car/card.py")
           launch = read("launch_openpilot.sh")
           web = read("system/nexo_web/web.py")
+          controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
+          hyundaican = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
+          planner = read("selfdrive/controls/lib/longitudinal_planner.py")
+          controls = read("selfdrive/controls/controlsd.py")
+          log_schema = read("cereal/log.capnp")
+          car_schema = read("opendbc_repo/opendbc/car/car.capnp")
+          interface = read("opendbc_repo/opendbc/car/hyundai/interface.py")
 
-          checks.append(("FCEV RADAR",
-              "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values))
-
-          checks.append(("tire stiffness",
-              "tireStiffnessFactor=0.385" in values))
-
-          checks.append(("speed",
-              "minEnableSpeed=10 * CV.KPH_TO_MS" in values))
-
-          checks.append(("gear",
-              "P=0, D=5, N=6, R=7" in carstate))
+          checks.append(("FCEV RADAR", "HyundaiFlags.FCEV | HyundaiFlags.MANDO_RADAR" in values))
+          checks.append(("tire stiffness", "tireStiffnessFactor=0.385" in values))
+          checks.append(("speed", "minEnableSpeed=10 * CV.KPH_TO_MS" in values))
+          checks.append(("gear", "P=0, D=5, N=6, R=7" in carstate))
 
           checks.append(("NEXO cruise after stock SCC suppression",
               'ret.cruiseState.available = True' in carstate and
@@ -94,8 +91,6 @@ jobs:
               "self.nexo_acc_fault_frames" not in carstate and
               'ret.accFaulted = False' in carstate))
 
-          controller = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
-          hyundaican = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
           checks.append(("NEXO SCC activation sequence",
               "CS.out.cruiseState.available, CS.out.cruiseState.enabled" in controller and
               "acc_enabled = enabled if is_nexo else enabled and main_mode_acc" in hyundaican and
@@ -111,10 +106,12 @@ jobs:
               "copy.copy(stock_scc12) if is_nexo and stock_scc12 else {}" in hyundaican and
               "copy.copy(stock_scc14) if is_nexo and stock_scc14 else {}" in hyundaican))
 
-          planner = read("selfdrive/controls/lib/longitudinal_planner.py")
-          controls = read("selfdrive/controls/controlsd.py")
-          log_schema = read("cereal/log.capnp")
-          car_schema = read("opendbc_repo/opendbc/car/car.capnp")
+          checks.append(("Carrot SCC/FCA status contract",
+              '"ObjValid": 1 if lead_visible else 0' in hyundaican and
+              '"ACC_ObjStatus": 1 if lead_visible else 0' in hyundaican and
+              '"FCA_Status": 1' in hyundaican and
+              '"FCA_USM": 1' in hyundaican))
+
           checks.append(("NEXO lead data path",
               "longitudinalPlan.leadDistance = lead_one.dRel if lead_one.status else 0.0" in planner and
               "longitudinalPlan.leadRelSpeed = lead_one.vRel if lead_one.status else 0.0" in planner and
@@ -125,11 +122,8 @@ jobs:
               "leadDistance @11: Float32;" in car_schema and
               "leadRelSpeed @12: Float32;" in car_schema))
 
-          checks.append(("NEXO MAIN passthrough",
-              "main_button_events = []" in carstate))
-
-          checks.append(("NEXO radar 20 Hz",
-              "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))
+          checks.append(("NEXO MAIN passthrough", "main_button_events = []" in carstate))
+          checks.append(("NEXO radar 20 Hz", "radar_frequency = 20 if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else 50" in radar))
 
           checks.append(("NEXO stock cruise recovery",
               'params.put_bool("AlphaLongitudinalEnabled", False, block=True)' in card and
@@ -156,24 +150,19 @@ jobs:
               "SCC/FCA/레이더 CAN 집계" in web and
               "def important_log_output" in web))
 
-          interface = Path("opendbc_repo/opendbc/car/hyundai/interface.py").read_text()
           checks.append(("NEXO longitudinal toggle and Panda safety lockstep",
               "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable" in interface and
               "if ret.openpilotLongitudinalControl:" in interface and
               "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in interface and
               "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" not in interface))
 
-          checks.append(("Simple NEXO disable-radar-disable sequence",
+          checks.append(("Carrot NEXO disable-then-radar sequence",
               interface.index("disabled = disable_ecu") <
-              interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) <
-              interface.index("disabled_after_tracks = disable_ecu", interface.index("tracks_enabled = enable_radar_tracks")) and
-              "NEXO_STOCK_SCC_ADDRS" not in interface and
-              "def nexo_stock_scc_is_silent" not in interface and
-              "saw_bus_traffic" not in interface and
-              "for attempt in range(1, 4)" not in interface and
+              interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) and
+              "disabled_after_tracks" not in interface and
+              "STEP 3 re-request" not in interface and
+              "DONE Carrot-style disable-then-radar sequence" in interface and
               "retries=40" in interface and
-              'raise RuntimeError("NEXO stock SCC communication could not be disabled")' not in interface and
-              'raise RuntimeError("NEXO stock SCC remained active after radar track activation")' not in interface and
               'raise RuntimeError("NEXO radar track activation failed")' in interface))
 
           checks.append(("NEXOdriveAI-style short radar retries",
@@ -182,26 +171,14 @@ jobs:
               "def enable_radar_tracks(can_recv, can_send, bus, retries=40)" in radar_tracks and
               'b"\\x6e" + RADAR_TRACK_CONFIG_DID' in radar_tracks))
 
-          checks.append(("apply removed",
-              "apply_nexo_ai.py" not in launch))
-
-          checks.append(("skip fw removed",
-              "SKIP_FW_QUERY" not in launch))
-
-          checks.append(("auth",
-              "def _require_auth" in web))
-
-          checks.append(("same origin",
-              "def _same_origin" in web))
-
-          checks.append(("request body",
-              "MAX_REQUEST_BODY" in web))
-
-          checks.append(("old patch removed",
-              not Path("tools/apply_nexo_ai.py").exists()))
+          checks.append(("apply removed", "apply_nexo_ai.py" not in launch))
+          checks.append(("skip fw removed", "SKIP_FW_QUERY" not in launch))
+          checks.append(("auth", "def _require_auth" in web))
+          checks.append(("same origin", "def _same_origin" in web))
+          checks.append(("request body", "MAX_REQUEST_BODY" in web))
+          checks.append(("old patch removed", not Path("tools/apply_nexo_ai.py").exists()))
 
           failed = False
-
           for name, result in checks:
               print(name, "OK" if result else "FAIL")
               if not result:
