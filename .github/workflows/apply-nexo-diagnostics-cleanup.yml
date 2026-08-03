@@ -1,0 +1,186 @@
+name: Apply NEXO diagnostics cleanup
+
+on:
+  push:
+    branches: [NEXO]
+    paths:
+      - .github/workflows/apply-nexo-diagnostics-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch diagnostics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("system/nexo_web/web.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''IMPORTANT_LOG_PATTERN = re.compile(
+            r"(unknown signal|traceback|exception|fatal|error|fault|mismatch|bus off|"
+            r"controlsallowed|cruise|radar|scc|fca|aeb|fcw|disable[_ ]ecu|safety)",
+            re.IGNORECASE,
+          )
+
+
+          def important_log_output() -> str:
+            """Return a compact, de-duplicated summary instead of flooding the page."""
+            raw = tmux_output()
+            matches = Counter()
+            samples = {}
+            for raw_line in raw.splitlines():
+              line = re.sub(r"\\s+", " ", raw_line.strip())
+              if not line or not IMPORTANT_LOG_PATTERN.search(line):
+                continue
+              # Runtime timestamps and counters make otherwise identical errors unique.
+              key = re.sub(r"^\\d\\d:\\d\\d:\\d\\d(?:\\.\\d+)?\\s+", "", line)
+              key = re.sub(r"\\b((?:count|attempt)\\s*[=:]?)\\s*\\d+\\b", r"\\1 <N>", key, flags=re.IGNORECASE)
+              matches[key] += 1
+              samples.setdefault(key, line)
+
+            if not matches:
+              return "최근 로그에서 롱컨·레이더·안전 관련 오류를 찾지 못했습니다."
+
+            lines = ["중복 로그는 한 줄로 합쳤습니다."]
+            for key, count in matches.most_common(80):
+              suffix = f"  (반복 {count}회)" if count > 1 else ""
+              lines.append(f"{samples[key]}{suffix}")
+            return "\\n".join(lines)
+          '''
+
+          new = '''IMPORTANT_LOG_PATTERN = re.compile(
+            r"(unknown signal|traceback|exception|fatal|mismatch|bus off|relay malfunction|"
+            r"not valid \\(timeout or missing\\)|commissue|cruise fault|"
+            r"radar(?:[^a-z0-9]+\\w+){0,4}[^\\n]*(?:fault|error|unavailable)|"
+            r"safety[^\\n]*(?:invalid|fault|violation)|(?:^|[^a-z])error(?:[^a-z]|$))",
+            re.IGNORECASE,
+          )
+          PROCESS_LIST_ONLY = re.compile(
+            r"^(?:\\[?[a-z0-9_.-]+\\]?\\s+)*(?:radard|hardwared|modem|tombstoned|feedbackd|webrtcd)"
+            r"(?:\\s+(?:radard|hardwared|modem|tombstoned|feedbackd|webrtcd))*$",
+            re.IGNORECASE,
+          )
+
+
+          def important_log_output() -> str:
+            """Show real faults only; process names and normal status lines are not errors."""
+            raw = tmux_output()
+            matches = Counter()
+            samples = {}
+            for raw_line in raw.splitlines():
+              line = re.sub(r"\\s+", " ", raw_line.strip())
+              if not line or PROCESS_LIST_ONLY.fullmatch(line):
+                continue
+              if not IMPORTANT_LOG_PATTERN.search(line):
+                continue
+              # JSON status snapshots often contain the word error with a false value.
+              lowered = line.lower().replace(" ", "")
+              if ('"error":false' in lowered or "error=false" in lowered) and not any(
+                  token in lowered for token in ("traceback", "exception", "fatal", "fault", "notvalid", "commissue")):
+                continue
+              key = re.sub(r"^\\d\\d:\\d\\d:\\d\\d(?:\\.\\d+)?\\s+", "", line)
+              key = re.sub(r"\\b((?:count|attempt)\\s*[=:]?)\\s*\\d+\\b", r"\\1 <N>", key, flags=re.IGNORECASE)
+              matches[key] += 1
+              samples.setdefault(key, line)
+
+            if not matches:
+              return "최근 로그에서 실제 롱컨·레이더·안전 오류를 찾지 못했습니다."
+
+            lines = ["실제 오류만 표시하며 중복 로그는 한 줄로 합쳤습니다."]
+            for key, count in matches.most_common(80):
+              suffix = f"  (반복 {count}회)" if count > 1 else ""
+              lines.append(f"{samples[key]}{suffix}")
+            return "\\n".join(lines)
+          '''
+
+          if old not in text:
+            raise SystemExit("important log block not found")
+          text = text.replace(old, new)
+
+          old = '''  lines = [
+            "1.5초 실제 CAN 수집 결과",
+            (
+              f"SCC/FCA 합계: 차량 수신 {status_totals['차량 수신']}회 | "
+              f"송신 성공 {status_totals['송신 성공']}회 | 안전 차단 {status_totals['안전 차단']}회"
+            ),
+            "※ src 128~135는 송신 성공, src 192~199는 판다 안전 차단 표시입니다.",
+          ]
+          '''
+          new = '''  control_active = False
+          controls_allowed = False
+          try:
+            state_sm = messaging.SubMaster(["selfdriveState", "pandaStates"])
+            state_sm.update(500)
+            control_active = bool(state_sm["selfdriveState"].active)
+            pandas = state_sm["pandaStates"]
+            controls_allowed = bool(pandas[0].controlsAllowed) if len(pandas) else False
+          except Exception:
+            pass
+
+          blocked_label = "안전 차단" if control_active or controls_allowed else "비활성 중 예상 차단"
+          lines = [
+            "1.5초 실제 CAN 수집 결과",
+            (
+              f"SCC/FCA 합계: 차량 수신 {status_totals['차량 수신']}회 | "
+              f"송신 성공 {status_totals['송신 성공']}회 | {blocked_label} {status_totals['안전 차단']}회"
+            ),
+            f"제어 상태: active={control_active}, controlsAllowed={controls_allowed}",
+            "※ P단 또는 크루즈 비활성 상태에서 src 192~199가 보이는 것은 Panda의 정상 차단일 수 있습니다.",
+            "※ active=True 또는 controlsAllowed=True인 동안 차단이 계속될 때만 실제 안전 문제로 판단하세요.",
+          ]
+          '''
+          if old not in text:
+            raise SystemExit("raw CAN summary block not found")
+          text = text.replace(old, new)
+
+          old = '''  lines = [
+            "NexoPilot NEXO 롱컨 블랙박스",
+          '''
+          new = '''  control_active = bool(previous[8]) if previous is not None else False
+          controls_allowed = bool(previous[11]) if previous is not None and previous[11] is not None else False
+          if blocked_scc_count:
+            blocked_verdict = ("실제 제어 중 Panda 차단이 관측됨: 안전 조건과 송신 메시지를 확인해야 합니다."
+                               if control_active or controls_allowed else
+                               "크루즈 비활성 중 Panda 차단이 관측됨: 현재 상태에서는 정상적인 차단일 수 있습니다.")
+          else:
+            blocked_verdict = "Panda 차단 SCC/FCA 프레임이 관측되지 않았습니다."
+
+          lines = [
+            "NexoPilot NEXO 롱컨 블랙박스",
+          '''
+          if old not in text:
+            raise SystemExit("blackbox lines block not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    f"Panda 차단 SCC/FCA 프레임: {blocked_scc_count}",
+            f"레이더 트랙 프레임: {radar_track_count}",
+            f"판정: {overlap_verdict}",
+          '''
+          new = '''    f"Panda 차단 SCC/FCA 프레임: {blocked_scc_count}",
+            f"수집 종료 제어 상태: active={control_active}, controlsAllowed={controls_allowed}",
+            f"차단 판정: {blocked_verdict}",
+            f"레이더 트랙 프레임: {radar_track_count}",
+            f"SCC 판정: {overlap_verdict}",
+          '''
+          if old not in text:
+            raise SystemExit("blackbox verdict block not found")
+          text = text.replace(old, new, 1)
+
+          text = text.replace('server_version = "NexoPilotWeb/6.1"', 'server_version = "NexoPilotWeb/6.2"')
+          path.write_text(text, encoding="utf-8")
+          PY
+          python -m py_compile system/nexo_web/web.py
+          rm .github/workflows/apply-nexo-diagnostics-cleanup.yml
+          git config user.name "NexoPilot Diagnostics Bot"
+          git config user.email "nexopilot-bot@users.noreply.github.com"
+          git add system/nexo_web/web.py .github/workflows/apply-nexo-diagnostics-cleanup.yml
+          git commit -m "Fix NEXO diagnostics false positives"
+          git push origin HEAD:NEXO
