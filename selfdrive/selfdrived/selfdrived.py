@@ -186,8 +186,11 @@ class SelfdriveD:
     if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
 
-    # Handle DM
-    if not self.CP.notCar:
+    # Never surface driver-monitoring alerts unless openpilot and the vehicle's
+    # actual cruise state are active in a driving gear.
+    in_drive_gear = CS.gearShifter in (car.CarState.GearShifter.drive, car.CarState.GearShifter.low)
+    dm_active = self.enabled and CS.cruiseState.enabled and in_drive_gear
+    if not self.CP.notCar and dm_active:
       # Block engaging until ignition cycle after max number or time of distractions
       if self.sm['driverMonitoringState'].lockout and not self.dm_lockout_set:
         self.params.put_bool("DriverTooDistracted", True)
