@@ -152,7 +152,9 @@ class CarInterface(CarInterfaceBase):
       ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or not radar_dbc_available
 
     is_nexo = candidate == CAR.HYUNDAI_NEXO_1ST_GEN
-    ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
+    # Safety recovery: leave the factory NEXO SCC/FCA ECU online. The current
+    # replacement longitudinal message set triggers the cluster SCC fault.
+    ret.openpilotLongitudinalControl = False if is_nexo else alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
     ret.startingState = True
     ret.vEgoStarting = 0.1
