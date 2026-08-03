@@ -13,7 +13,6 @@ ButtonType = structs.CarState.ButtonEvent.Type
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 STANDSTILL_THRESHOLD = 12 * 0.03125
-NEXO_ACC_FAULT_DEBOUNCE_FRAMES = 100
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
@@ -64,13 +63,9 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # Stock SCC is disabled for NEXO longitudinal control. Ignore a short
-    # ACCEnable transition while SCC12/SCC14 take ownership, but preserve a
-    # persistent vehicle fault.
-    self.nexo_acc_fault_frames = 0
-    # Preserve the last stock SCC payload for NEXO. Its SCC messages contain
-    # platform-specific status bits that are safer to retain than to recreate
-    # from a mostly-empty dictionary after disabling the stock SCC ECU.
+    # NEXO openpilot longitudinal disables the stock SCC ECU before card starts.
+    # Keep empty templates and let hyundaican fill every field openpilot owns;
+    # reading SCC11/SCC12/SCC14 after suppression incorrectly marks them missing.
     self.scc11 = {}
     self.scc12 = {}
     self.scc14 = {}
@@ -132,9 +127,10 @@ class CarState(CarStateBase):
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
-        # Let the vehicle own its CRUISE/LIMIT selection. Mirroring MAIN with a
-        # local latch can fight the cluster state and leave LIMIT stuck.
-        ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
+        # ACCEnable becomes disabled after the stock SCC ECU is intentionally
+        # silenced. It is therefore not a valid availability/fault signal for
+        # NEXO openpilot longitudinal. Buttons and controls state own engagement.
+        ret.cruiseState.available = True
         ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       else:
         ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
@@ -157,8 +153,9 @@ class CarState(CarStateBase):
     ret.espActive = cp.vl["TCS11"]["ABS_ACT"] == 1
     acc_faulted = cp.vl["TCS13"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
-      self.nexo_acc_fault_frames = min(self.nexo_acc_fault_frames + 1, NEXO_ACC_FAULT_DEBOUNCE_FRAMES) if acc_faulted else 0
-      ret.accFaulted = self.nexo_acc_fault_frames >= NEXO_ACC_FAULT_DEBOUNCE_FRAMES
+      # Expected after disabling stock SCC; real CAN/Panda faults remain
+      # available through canValid, rxChecks and safety events.
+      ret.accFaulted = False
     else:
       ret.accFaulted = acc_faulted
 
@@ -217,7 +214,7 @@ class CarState(CarStateBase):
     # save the entire LKAS11 and CLU11
     self.lkas11 = copy.copy(cp_cam.vl["LKAS11"])
     self.clu11 = copy.copy(cp.vl["CLU11"])
-    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and not self.CP.openpilotLongitudinalControl:
       self.scc11 = copy.copy(cp_cruise.vl["SCC11"])
       self.scc12 = copy.copy(cp_cruise.vl["SCC12"])
       self.scc14 = copy.copy(cp_cruise.vl["SCC14"])
