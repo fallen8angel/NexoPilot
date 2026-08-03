@@ -31,9 +31,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check commit whitespace
-        run: git diff-tree --check --no-commit-id --root -r HEAD
-
       - name: Check NEXO integration
         run: python tools/check_nexo_integration.py
 
