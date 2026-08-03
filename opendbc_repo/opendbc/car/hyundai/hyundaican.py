@@ -46,56 +46,30 @@ def create_lkas11(packer, frame, CP, apply_torque, steer_req,
     values["CF_Lkas_LdwsActivemode"] = int(left_lane) + (int(right_lane) << 1)
     values["CF_Lkas_LdwsOpt_USM"] = 2
 
-    # FcwOpt_USM 5 = Orange blinking car + lanes
-    # FcwOpt_USM 4 = Orange car + lanes
-    # FcwOpt_USM 3 = Green blinking car + lanes
-    # FcwOpt_USM 2 = Green car + lanes
-    # FcwOpt_USM 1 = White car + lanes
-    # FcwOpt_USM 0 = No car + lanes
     values["CF_Lkas_FcwOpt_USM"] = 2 if enabled else 1
-
-    # SysWarning 4 = keep hands on wheel
-    # SysWarning 5 = keep hands on wheel (red)
-    # SysWarning 6 = keep hands on wheel (red) + beep
-    # Note: the warning is hidden while the blinkers are on
     values["CF_Lkas_SysWarning"] = 4 if sys_warning else 0
 
-  # Likely cars lacking the ability to show individual lane lines in the dash
   elif CP.carFingerprint in (CAR.KIA_OPTIMA_G4, CAR.KIA_OPTIMA_G4_FL):
-    # SysWarning 4 = keep hands on wheel + beep
     values["CF_Lkas_SysWarning"] = 4 if sys_warning else 0
-
-    # SysState 0 = no icons
-    # SysState 1-2 = white car + lanes
-    # SysState 3 = green car + lanes, green steering wheel
-    # SysState 4 = green car + lanes
     values["CF_Lkas_LdwsSysState"] = 3 if enabled else 1
-    values["CF_Lkas_LdwsOpt_USM"] = 2  # non-2 changes above SysState definition
-
-    # these have no effect
+    values["CF_Lkas_LdwsOpt_USM"] = 2
     values["CF_Lkas_LdwsActivemode"] = 0
     values["CF_Lkas_FcwOpt_USM"] = 0
 
   elif CP.carFingerprint == CAR.HYUNDAI_GENESIS:
-    # This field is actually LdwsActivemode
-    # Genesis and Optima fault when forwarding while engaged
     values["CF_Lkas_LdwsActivemode"] = 2
 
   dat = packer.make_can_msg("LKAS11", 0, values)[1]
 
   if CP.flags & HyundaiFlags.CHECKSUM_CRC8:
-    # CRC Checksum as seen on 2019 Hyundai Santa Fe
     dat = dat[:6] + dat[7:8]
     checksum = hyundai_checksum(dat)
   elif CP.flags & HyundaiFlags.CHECKSUM_6B:
-    # Checksum of first 6 Bytes, as seen on 2018 Kia Sorento
     checksum = sum(dat[:6]) % 256
   else:
-    # Checksum of first 6 Bytes and last Byte as seen on 2018 Kia Stinger
     checksum = (sum(dat[:6]) + dat[7]) % 256
 
   values["CF_Lkas_Chksum"] = checksum
-
   return packer.make_can_msg("LKAS11", 0, values)
 
 
@@ -116,7 +90,6 @@ def create_clu11(packer, frame, clu11, button, CP):
   ]}
   values["CF_Clu_CruiseSwState"] = button
   values["CF_Clu_AliveCnt1"] = frame % 0x10
-  # send buttons to camera on camera-scc based cars
   bus = 2 if CP.flags & HyundaiFlags.CAMERA_SCC else 0
   return packer.make_can_msg("CLU11", bus, values)
 
@@ -133,9 +106,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   commands = []
   is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
   main_mode_acc = cruise_available
-  # ACC_REQ is vehicle feedback, not permission to start SCC12. Waiting for it
-  # creates a circular dependency: NEXO waits for SCC12 while openpilot waits
-  # for ACC_REQ. Keep SCC12 and SCC14 in the same requested state.
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
   scc14_enabled = acc_enabled
 
@@ -144,20 +114,18 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
 
-  # NEXO and the older Santa Fe generation share a stock-message-preserving
-  # longitudinal pattern. Keep NEXO's unknown/platform-specific SCC bits and
-  # only replace the fields that openpilot owns.
   scc11_values = copy.copy(stock_scc11) if is_nexo and stock_scc11 else {}
   scc11_values.update({
     "MainMode_ACC": main_mode_acc,
     "TauGapSet": hud_control.leadDistanceBars,
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
-    # Do not replay a stale stock "lost lead"/"standstill" message after the
-    # radar ECU has been disabled. Carrot explicitly owns both display fields.
     "SCCInfoDisplay": 0,
-    "ObjValid": 1 if lead_visible else 0,
-    "ACC_ObjStatus": 1 if lead_visible else 0,
+    # NEXOdriveAI keeps the cluster-facing radar object state valid even when
+    # no lead is selected. The actual object distance and relative speed remain
+    # zero, so this preserves the normal SCC/FCA status without inventing a lead.
+    "ObjValid": 1 if is_nexo else 1 if lead_visible else 0,
+    "ACC_ObjStatus": 1 if is_nexo else 1 if lead_visible else 0,
     "ACC_ObjLatPos": 0,
     "ACC_ObjRelSpd": lead_rel_speed,
     "ACC_ObjDist": lead_distance,
@@ -169,48 +137,38 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   scc12_values.update({
     "ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0,
     "StopReq": 1 if acc_enabled and stopping else 0,
-    "aReqRaw": accel,
-    "aReqValue": accel,  # stock ramps up and down respecting jerk limit until it reaches aReqRaw
+    "aReqRaw": accel if acc_enabled else 0.0,
+    "aReqValue": accel if acc_enabled else 0.0,
     "ACCFailInfo": 0,
     "TakeOverReq": 0,
     "CR_VSM_ChkSum": 0,
     "CR_VSM_Alive": idx % 0xF,
   })
 
-  # Generic Hyundai longitudinal uses the disabled status when the stock FCA
-  # message is unavailable. NEXO treats that status as a system fault, so keep
-  # the cluster-facing FCA/AEB state normal. This does not claim openpilot AEB;
-  # openpilot longitudinal still owns only ACC acceleration and braking.
   if not use_fca and not is_nexo:
     scc12_values["CF_VSM_ConfMode"] = 1
-    scc12_values["AEB_Status"] = 1  # AEB disabled
+    scc12_values["AEB_Status"] = 1
 
   scc12_dat = packer.make_can_msg("SCC12", 0, scc12_values)[1]
   scc12_values["CR_VSM_ChkSum"] = 0x10 - sum(sum(divmod(i, 16)) for i in scc12_dat) % 0x10
-
   commands.append(packer.make_can_msg("SCC12", 0, scc12_values))
 
   scc14_values = copy.copy(stock_scc14) if is_nexo and stock_scc14 else {}
   scc14_values.update({
-    "ComfortBandUpper": 0.0, # stock usually is 0 but sometimes uses higher values
-    "ComfortBandLower": 0.0, # stock usually is 0 but sometimes uses higher values
-    "JerkUpperLimit": upper_jerk, # stock usually is 1.0 but sometimes uses higher values
-    "JerkLowerLimit": 5.0, # stock usually is 0.5 but sometimes uses higher values
+    "ComfortBandUpper": 0.0,
+    "ComfortBandLower": 0.0,
+    "JerkUpperLimit": upper_jerk,
+    "JerkLowerLimit": 5.0,
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
-    "ObjGap": obj_gap, # 5: >70 m, 4: 40-70 m, 3: 25-40 m, 2: <25 m, 0: no lead
+    "ObjGap": obj_gap,
   })
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
-  # Only send FCA11 on cars where it exists on the bus
-  # On Camera SCC cars, FCA11 is not disabled, so we forward stock FCA11 back to the car forward hooks
   if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
-    # note that some vehicles most likely have an alternate checksum/counter definition
-    # https://github.com/commaai/opendbc/commit/9ddcdb22c4929baf310295e832668e6e7fcfa602
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      # NEXO faults the FCA cluster when this is advertised as disabled.
       "FCA_Status": 0 if is_nexo else 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
@@ -230,13 +188,10 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # TODO: this needs to be detected and conditionally sent on unsupported long cars
-  # On Camera SCC cars, FCA12 is not disabled, so we forward stock FCA12 back to the car forward hooks
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
     fca12_values = {
       "FCA_DrvSetState": 2,
-      # 1 explicitly advertises AEB disabled and lights the NEXO FCA warning.
       "FCA_USM": 0 if is_nexo else 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
