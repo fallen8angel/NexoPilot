@@ -110,10 +110,10 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   # Keep the legacy template arguments only for call-site compatibility.
   del stock_scc11, stock_scc12, stock_scc14
 
-  # NEXO CarState intentionally stays available after stock SCC suppression so
-  # openpilot can engage from the steering-wheel buttons. Do not advertise
-  # MainMode_ACC on the cluster until openpilot or the vehicle actually engages.
-  main_mode_acc = (enabled or vehicle_cruise_enabled) if is_nexo else cruise_available
+  # After the stock SCC ECU is silenced, NEXO must keep advertising that cruise
+  # is available. Otherwise the cluster shows SCC/FCA warnings and SET/RES cannot
+  # transition controlsAllowed to true even though radar tracks are active.
+  main_mode_acc = cruise_available
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
   scc14_enabled = acc_enabled
   stop_req = 1 if acc_enabled and stopping else 0
