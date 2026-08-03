@@ -159,12 +159,17 @@ jobs:
               "if ret.openpilotLongitudinalControl:" in interface and
               "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in interface and
               "HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.FCEV_GAS" not in interface))
-          checks.append(("Carrot NEXO disable-then-radar sequence",
+          checks.append(("Verified NEXO disable-then-radar sequence",
               interface.index("disabled = disable_ecu") <
               interface.index("tracks_enabled = enable_radar_tracks", interface.index("disabled = disable_ecu")) and
-              "nexo_stock_scc_is_silent" not in interface and
+              "NEXO_STOCK_SCC_ADDRS" in interface and
+              "def nexo_stock_scc_is_silent" in interface and
+              "saw_bus_traffic" in interface and
+              "for attempt in range(1, 4)" in interface and
+              "disabled_after_tracks and nexo_stock_scc_is_silent(can_recv, bus)" in interface and
               'raise RuntimeError("NEXO stock SCC communication could not be disabled")' in interface and
               'raise RuntimeError("NEXO radar track activation failed")' in interface and
+              'raise RuntimeError("NEXO stock SCC remained active after radar track activation")' in interface and
               "retries=3" in interface))
 
           checks.append(("apply removed",
