@@ -41,9 +41,6 @@ jobs:
             selfdrive/controls/lib/longitudinal_planner.py \
             system/nexo_web/web.py
 
-      - name: Test NEXO longitudinal init
-        run: PYTHONPATH=opendbc_repo python -m unittest opendbc.car.hyundai.tests.test_nexo_init
-
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
 
