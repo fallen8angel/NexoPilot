@@ -1,0 +1,51 @@
+name: Apply NEXO AI runtime guard
+
+on:
+  push:
+    branches:
+      - agent/nexo-ai-runtime-scc-guard
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-nexo-ai-runtime-guard
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply patch
+        run: python tools/apply_nexo_ai_runtime_guard.py
+
+      - name: Validate integration
+        run: |
+          python tools/check_nexo_integration.py
+          PYTHONPATH=. python -m unittest selfdrive.car.tests.test_nexo_guard
+          python tools/check_nexo_dbc_contract.py
+
+      - name: Commit generated changes
+        run: |
+          git config user.name "NexoPilot CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "Use NEXOdriveAI radar sequence with runtime SCC fallback"
+          git push origin HEAD:agent/nexo-ai-runtime-scc-guard
