@@ -35,7 +35,7 @@ jobs:
           python-version: "3.12"
 
       - name: Apply patch
-        run: PYTHONPATH=tools python tools/apply_nexo_ai_runtime_guard_v4.py
+        run: PYTHONPATH=tools python tools/apply_nexo_ai_runtime_guard_v5.py
 
       - name: Validate integration
         run: |
