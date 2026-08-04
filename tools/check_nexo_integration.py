@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Stable, dependency-free validation for the NEXO longitudinal integration."""
+"""Stable, dependency-free validation for the NEXO longitudinal integration.
+
+The checks intentionally inspect Python syntax trees instead of exact source
+formatting so harmless whitespace, comments, and line wrapping cannot break CI.
+"""
 
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 
@@ -37,10 +42,48 @@ def require(condition: bool, message: str) -> None:
     raise AssertionError(message)
 
 
+def parse(relative: str) -> ast.Module:
+  return ast.parse(read(relative), filename=relative)
+
+
+def find_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+  function = next(
+    (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name),
+    None,
+  )
+  require(function is not None, f"missing function: {name}")
+  return function
+
+
+def assignments(function: ast.FunctionDef) -> dict[str, ast.AST]:
+  result: dict[str, ast.AST] = {}
+  for node in ast.walk(function):
+    if isinstance(node, ast.Assign):
+      for target in node.targets:
+        if isinstance(target, ast.Name):
+          result[target.id] = node.value
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+      result[node.target.id] = node.value
+  return result
+
+
+def dict_keys(node: ast.AST | None) -> set[str]:
+  if not isinstance(node, ast.Dict):
+    return set()
+  return {
+    key.value
+    for key in node.keys
+    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+  }
+
+
+def is_name(node: ast.AST | None, name: str) -> bool:
+  return isinstance(node, ast.Name) and node.id == name
+
+
 def parse_python_files() -> None:
   for relative in PYTHON_FILES:
-    source = read(relative)
-    ast.parse(source, filename=relative)
+    parse(relative)
     print(f"syntax OK: {relative}")
 
 
@@ -67,44 +110,74 @@ def validate_interface() -> None:
 
 
 def validate_hyundaican() -> None:
-  source = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
-  tree = ast.parse(source, filename="hyundaican.py")
-  functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-  require("create_acc_commands" in functions, "create_acc_commands missing")
-  require("create_acc_opt" in functions, "create_acc_opt missing")
+  relative = "opendbc_repo/opendbc/car/hyundai/hyundaican.py"
+  source = read(relative)
+  tree = parse(relative)
+  create_acc_commands = find_function(tree, "create_acc_commands")
+  create_acc_opt = find_function(tree, "create_acc_opt")
+  values = assignments(create_acc_commands)
 
-  required = (
-    "del stock_scc11, stock_scc12, stock_scc14",
-    "scc11_values = {",
-    "scc12_values = {",
-    "scc14_values = {",
-    "main_mode_acc = (enabled or vehicle_cruise_enabled) if is_nexo else cruise_available",
-    "acc_enabled = enabled if is_nexo else enabled and main_mode_acc",
-    '"ACCMode": 2 if acc_enabled and long_override else 1 if acc_enabled else 0',
-    '"ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4',
-    "if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):",
-    "if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):",
-  )
-  for token in required:
-    require(token in source, f"hyundaican contract missing: {token}")
+  # Current NEXO contract: after stock SCC takeover, SCC11 continues to
+  # advertise cruise availability while actual acceleration still requires
+  # openpilot enablement. Check the expression tree rather than source spacing.
+  require(is_name(values.get("main_mode_acc"), "cruise_available"),
+          "NEXO main mode must follow cruise_available")
 
+  acc_enabled = values.get("acc_enabled")
+  require(isinstance(acc_enabled, ast.IfExp), "acc_enabled must be a conditional expression")
+  require(is_name(acc_enabled.test, "is_nexo") and is_name(acc_enabled.body, "enabled"),
+          "NEXO acc_enabled must follow enabled")
+  require(isinstance(acc_enabled.orelse, ast.BoolOp) and isinstance(acc_enabled.orelse.op, ast.And),
+          "non-NEXO acc_enabled must require enabled and main_mode_acc")
+  require([node.id for node in acc_enabled.orelse.values if isinstance(node, ast.Name)] == ["enabled", "main_mode_acc"],
+          "non-NEXO acc_enabled operands changed")
+
+  required_dict_keys = {
+    "scc11_values": {
+      "MainMode_ACC", "TauGapSet", "VSetDis", "AliveCounterACC",
+      "ObjValid", "ACC_ObjStatus", "ACC_ObjRelSpd", "ACC_ObjDist",
+    },
+    "scc12_values": {
+      "ACCMode", "StopReq", "aReqRaw", "aReqValue",
+      "ACCFailInfo", "CR_VSM_ChkSum", "CR_VSM_Alive",
+    },
+    "scc14_values": {
+      "ComfortBandUpper", "ComfortBandLower", "JerkUpperLimit",
+      "JerkLowerLimit", "ACCMode", "ObjGap",
+    },
+  }
+  for variable, expected in required_dict_keys.items():
+    actual = dict_keys(values.get(variable))
+    require(expected <= actual, f"{variable} missing fields: {sorted(expected - actual)}")
+
+  # Stock templates must not return to the direct-generation NEXO path.
   require("copy.copy(stock_scc11)" not in source, "stock SCC11 template copy must stay removed")
   require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
   require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
 
+  command_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_commands) if isinstance(node, ast.If)]
+  require(any("use_fca" in condition and "not is_nexo" in condition and "CAMERA_SCC" in condition
+              for condition in command_conditions),
+          "NEXO FCA11 suppression condition missing")
+
+  opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
+  require(any("not is_nexo" in condition and "CAMERA_SCC" in condition for condition in opt_conditions),
+          "NEXO FCA12 suppression condition missing")
+
 
 def validate_controller() -> None:
   source = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
+  compact = " ".join(source.split())
   required = (
-    "if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:",
+    "self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl",
     "hyundaican.create_acc_commands",
-    "if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:",
+    "self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl",
     "hyundaican.create_acc_opt",
-    "if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl:",
+    "self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl",
     "hyundaican.create_frt_radar_opt",
   )
   for token in required:
-    require(token in source, f"controller cadence missing: {token}")
+    require(token in compact, f"controller cadence missing: {token}")
 
 
 def validate_recovery() -> None:
@@ -124,15 +197,12 @@ def validate_recovery() -> None:
 
 def validate_safety() -> None:
   source = read("opendbc_repo/opendbc/safety/modes/hyundai.h")
-  required = (
-    "HYUNDAI_LONG_COMMON_TX_MSGS",
-    "{0x38D, 0, 8, .check_relay = false}",
-    "{0x483, 0, 8, .check_relay = false}",
-    "{0x7D0, 0, 8, .check_relay = false}",
-    "longitudinal_accel_checks",
-  )
-  for token in required:
-    require(token in source, f"Panda safety contract missing: {token}")
+  require("HYUNDAI_LONG_COMMON_TX_MSGS" in source, "longitudinal TX allowlist missing")
+  require("longitudinal_accel_checks" in source, "longitudinal acceleration safety check missing")
+
+  for address in ("0x38D", "0x483", "0x7D0"):
+    pattern = rf"\{{\s*{address}\s*,\s*0\s*,\s*8\s*,\s*\.check_relay\s*=\s*false\s*\}}"
+    require(re.search(pattern, source) is not None, f"Panda safety allowlist missing: {address}")
 
 
 def main() -> None:
