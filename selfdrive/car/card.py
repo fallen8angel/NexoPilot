@@ -2,6 +2,7 @@
 import os
 import time
 import threading
+import traceback
 
 import cereal.messaging as messaging
 
@@ -21,6 +22,9 @@ from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.nexo_diagnostics import record_nexo_fault_snapshot
 from openpilot.selfdrive.car.nexo_guard import NexoStockSccRuntimeGuard
+from openpilot.selfdrive.car.nexo_runtime_diagnostics import (
+  record_nexo_card_crash, record_nexo_long_success, set_nexo_runtime_state,
+)
 
 REPLAY = "REPLAY" in os.environ
 
@@ -147,6 +151,11 @@ class Car:
       not REPLAY and self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN" and self.CP.openpilotLongitudinalControl
     )
     self.nexo_long_init_failed = False
+    self.nexo_stage = "constructed"
+    self.nexo_session_state = "waiting_for_long_init" if self.nexo_stock_scc_guard.enabled else "stock_cruise"
+    self.nexo_last_heartbeat = 0.0
+    if self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN":
+      set_nexo_runtime_state(self.params, self.nexo_session_state, self.nexo_stage)
 
     if self.CP.secOcRequired:
       # Copy user key if available
@@ -188,27 +197,43 @@ class Car:
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
+  def _update_nexo_heartbeat(self, force: bool = False) -> None:
+    if self.CP.carFingerprint != "HYUNDAI_NEXO_1ST_GEN":
+      return
+    now = time.monotonic()
+    if not force and now - self.nexo_last_heartbeat < 1.0:
+      return
+    self.nexo_last_heartbeat = now
+    try:
+      self.params.put("NexoCardHeartbeatMono", f"{now:.3f}")
+      self.params.put("NexoCardStage", self.nexo_stage)
+      self.params.put("NexoCardSessionState", self.nexo_session_state)
+    except Exception as error:
+      cloudlog.warning(f"NEXO card heartbeat publish failed: {error}")
+
   def _handle_nexo_long_failure(self, error: Exception) -> bool:
     self.sm.update(0)
     record_nexo_fault_snapshot(self.params, self.nexo_stock_scc_guard, self.sm, error)
     if not recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error):
       return False
 
-    # Restore the factory ECU stream when possible, but never change the user's
-    # longitudinal/experimental settings and never request an automatic reboot.
-    try:
-      self.CI.deinit(self.CP, *self.can_callbacks)
-    except Exception as restore_error:
-      cloudlog.exception(f"NEXO stock SCC restore request failed: {restore_error}")
-
+    # Do not issue a second diagnostic sequence here. Initial radar failure paths
+    # restore stock communication inside CarInterface.init(), and a runtime guard
+    # trip already proves that the factory SCC stream is present. Re-entering UDS
+    # from the card loop can terminate the process or create a new cluster fault.
     self.nexo_stock_scc_guard.disarm()
     self.nexo_long_init_failed = True
+    self.nexo_session_state = "failed_latched"
+    self.nexo_stage = "longitudinal_failed_latched"
     self.last_actuators_output = structs.CarControl.Actuators()
+    set_nexo_runtime_state(self.params, self.nexo_session_state, self.nexo_stage, str(error))
+    self._update_nexo_heartbeat(force=True)
     return True
 
   def state_update(self) -> tuple[car.CarState, structs.RadarDataT | None]:
     """carState update loop, driven by can"""
 
+    self.nexo_stage = "state_update"
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     can_list = can_capnp_to_list(can_strs)
     self.sm.update(0)
@@ -278,9 +303,15 @@ class Car:
     """control update loop, driven by carControl"""
 
     if self.nexo_long_init_failed:
+      self.nexo_stage = "longitudinal_failed_latched"
+      self._update_nexo_heartbeat()
       return
 
     if not self.initialized_prev:
+      self.nexo_stage = "longitudinal_initializing"
+      self.nexo_session_state = "initializing"
+      set_nexo_runtime_state(self.params, self.nexo_session_state, self.nexo_stage)
+
       # Initialize CarInterface, once controls are ready
       # TODO: this can make us miss at least a few cycles when doing an ECU knockout
       try:
@@ -290,12 +321,16 @@ class Car:
           return
         raise
       self.params.remove("NexoLongitudinalFailure")
+      self.nexo_session_state = "active"
+      self.nexo_stage = "longitudinal_active"
+      record_nexo_long_success(self.params)
       # Arm the raw-CAN guard only after the diagnostic takeover completed.
       self.nexo_stock_scc_guard.arm()
       # signal pandad to switch to car safety mode
       self.params.put_bool("ControlsReady", True)
 
     if self.sm.all_alive(['carControl']):
+      self.nexo_stage = "carcontroller_apply"
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos)
@@ -306,6 +341,7 @@ class Car:
   def step(self):
     CS, RD = self.state_update()
 
+    self.nexo_stage = "state_publish"
     self.state_publish(CS, RD)
 
     initialized = (not any(e.name == EventName.selfdriveInitializing for e in self.sm['onroadEvents']) and
@@ -315,6 +351,8 @@ class Car:
 
     self.initialized_prev = initialized
     self.CS_prev = CS
+    self.nexo_stage = "idle" if not self.nexo_long_init_failed else "longitudinal_failed_latched"
+    self._update_nexo_heartbeat()
 
   def params_thread(self, evt):
     while not evt.is_set():
@@ -337,8 +375,15 @@ class Car:
 
 def main():
   config_realtime_process(4, Priority.CTRL_HIGH)
-  car = Car()
-  car.card_thread()
+  params = Params()
+  card_process = None
+  try:
+    card_process = Car()
+    card_process.card_thread()
+  except Exception as error:
+    stage = getattr(card_process, "nexo_stage", "card_constructor")
+    record_nexo_card_crash(params, stage, error, traceback.format_exc())
+    raise
 
 
 if __name__ == "__main__":

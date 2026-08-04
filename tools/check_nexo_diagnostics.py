@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DIAGNOSTIC_FILES = (
   "selfdrive/car/nexo_guard.py",
   "selfdrive/car/nexo_diagnostics.py",
+  "selfdrive/car/nexo_runtime_diagnostics.py",
   "selfdrive/car/card.py",
   "system/nexo_web/web.py",
   "system/nexo_web/nexo_diagnostics_v2.py",
@@ -33,6 +34,7 @@ def main() -> None:
   guard = sources["selfdrive/car/nexo_guard.py"]
   writer = sources["selfdrive/car/nexo_diagnostics.py"]
   card = sources["selfdrive/car/card.py"]
+  runtime = sources["selfdrive/car/nexo_runtime_diagnostics.py"]
   entry = sources["system/nexo_web/web.py"]
   web = sources["system/nexo_web/nexo_diagnostics_v2.py"]
   radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
@@ -42,10 +44,15 @@ def main() -> None:
     require(token in guard, f"runtime diagnostic guard missing: {token}")
   for token in ("NEXO_LAST_FAULT_LOG", "record_nexo_fault_snapshot", "safety_rx_checks_invalid", "radar_errors"):
     require(token in writer, f"persistent fault capture missing: {token}")
-  for token in ("record_nexo_fault_snapshot", "selfdriveState", "radarState"):
+  for token in ("record_nexo_fault_snapshot", "record_nexo_card_crash", "record_nexo_long_success",
+                "NexoCardHeartbeatMono", "nexo_stage", "selfdriveState", "radarState"):
     require(token in card, f"card diagnostic connection missing: {token}")
+  for token in ("NEXO_CARD_CRASH_LOG", "NEXO_LONG_SUCCESS_LOG", "record_nexo_card_crash",
+                "record_nexo_long_success", "set_nexo_runtime_state", "traceback"):
+    require(token in runtime, f"card runtime diagnostics missing: {token}")
   for token in ("[SCC/FCA 분리 자동 판정]", "[sendcan 요청 → Panda 결과]",
                 "[주요 SCC/FCA 신호 DBC 해석]", "last_fault_output",
+                "runtime_status_output", "card_crash_output", "과거 버전 기록",
                 "순정 FCA11/FCA12 수신은 정상"):
     require(token in web, f"web diagnostics missing: {token}")
   require("diagnostics_v2.longitudinal_blackbox_output" in entry, "web v2 blackbox not wired")
@@ -54,6 +61,9 @@ def main() -> None:
     require(token in radar, f"radar UDS diagnostics missing: {token}")
   require("def _trace_nexo_long_init" in interface, "NEXO init trace helper missing")
   require("elapsed_ms" in interface, "disable ECU timing trace missing")
+  require("DEINIT stock SCC communication restore" in interface, "NEXO deinit restore trace missing")
+  require("CarInterface.init(CP, can_recv, can_send, communication_control)" in interface,
+          "non-NEXO deinit fallback missing")
   print("NEXO diagnostics v2 PASS")
 
 

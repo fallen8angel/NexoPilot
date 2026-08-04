@@ -41,11 +41,16 @@ def main() -> None:
     'params.put("NexoLongitudinalFailure", reason, block=True)',
     "self.nexo_long_init_failed",
     "self._handle_nexo_long_failure(error)",
-    "self.CI.deinit(self.CP, *self.can_callbacks)",
-    "if self.nexo_long_init_failed:\n      return",
+    "record_nexo_card_crash",
+    "record_nexo_long_success",
+    "NexoCardHeartbeatMono",
+    "if self.nexo_long_init_failed:",
+    "self._update_nexo_heartbeat()",
   ):
     require(token in card, f"current-session failure latch missing: {token}")
 
+  require("self.CI.deinit(self.CP, *self.can_callbacks)" not in card,
+          "card failure handler must not re-enter the radar UDS sequence")
   require("def disarm(self)" in guard, "runtime guard disarm support missing")
   require("마지막 롱컨 실패 기록" in web, "diagnostics wording still claims automatic recovery")
   require("자동 재부팅 없이 저장됩니다" in web, "no-auto-reboot policy is not visible in diagnostics")
