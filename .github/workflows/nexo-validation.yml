@@ -45,3 +45,6 @@ jobs:
 
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
+
+      - name: Check NEXO AI SCC ownership
+        run: python tools/check_nexo_ai_scc_ownership.py
