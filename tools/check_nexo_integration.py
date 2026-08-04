@@ -224,11 +224,30 @@ def validate_runtime_guard() -> None:
 def validate_safety() -> None:
   source = read("opendbc_repo/opendbc/safety/modes/hyundai.h")
   require("HYUNDAI_LONG_COMMON_TX_MSGS" in source, "longitudinal TX allowlist missing")
+  require("HYUNDAI_NEXO_LONG_COMMON_TX_MSGS" in source, "NEXO longitudinal TX allowlist missing")
   require("longitudinal_accel_checks" in source, "longitudinal acceleration safety check missing")
   require("hyundai_nexo_dynamic_scc_fwd" not in source,
-          "incorrect bus-direction dynamic SCC forwarding must stay removed")
-  require(".disable_static_blocking = true" not in source,
-          "SCC static relay blocking must remain enabled")
+          "obsolete bus-direction dynamic SCC forwarding must stay removed")
+
+  # Generic Hyundai longitudinal forwarding stays under normal static relay
+  # blocking. Only the explicit NEXO list opts into dynamic SCC11/12/13/14
+  # blocking, while keeping check_relay enabled and the source-0 runtime guard.
+  generic_macro = source.split("#define HYUNDAI_LONG_COMMON_TX_MSGS", 1)[1].split(
+    "#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[0]
+  nexo_macro = source.split("#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[1].split(
+    "#define HYUNDAI_COMMON_RX_CHECKS", 1)[0]
+  require("disable_static_blocking" not in generic_macro,
+          "generic Hyundai SCC static relay blocking must remain enabled")
+  require(nexo_macro.count(".disable_static_blocking = true") == 4,
+          "NEXO dynamic ownership must be limited to SCC11/12/13/14")
+  require(nexo_macro.count(".check_relay = true") >= 4,
+          "NEXO SCC relay detection must remain enabled")
+  require("hyundai_nexo_scc12_tx_seen" in source,
+          "NEXO ownership must be armed by accepted SCC12")
+  require("HYUNDAI_NEXO_SCC_OWNERSHIP_TIMEOUT_US = 400000U" in source,
+          "NEXO ownership timeout must remain 400 ms")
+  require(".fwd = hyundai_fwd_hook" in source,
+          "NEXO dynamic SCC forwarding hook is not wired")
 
   for address in ("0x38D", "0x483", "0x7D0"):
     pattern = rf"\{{\s*{address}\s*,\s*0\s*,\s*8\s*,\s*\.check_relay\s*=\s*false\s*\}}"

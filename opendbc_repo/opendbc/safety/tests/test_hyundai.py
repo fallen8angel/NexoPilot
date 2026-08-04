@@ -279,5 +279,57 @@ class TestHyundaiSafetyFCEVLong(TestHyundaiLongitudinalSafety, TestHyundaiSafety
     self.safety.init_tests()
 
 
+class TestHyundaiNexoDynamicSCCOwnership(unittest.TestCase):
+  SCC_ADDRS = (0x389, 0x420, 0x421, 0x50A)
+  FCA_ADDRS = (0x38D, 0x483)
+  TIMEOUT_US = 400_000
+
+  def setUp(self):
+    self.packer = CANPackerSafety("hyundai_can_generated")
+    self.safety = libsafety_py.libsafety
+    param = HyundaiSafetyFlags.FCEV_GAS | HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.NEXO_DYNAMIC_SCC
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, param)
+    self.safety.init_tests()
+    self.safety.set_timer(1_000_000)
+
+  def _accel_msg(self, accel):
+    values = {"aReqRaw": accel, "aReqValue": accel, "AEB_CmdAct": 0, "CR_VSM_DecCmd": 0}
+    return self.packer.make_can_msg_safety("SCC12", 0, values)
+
+  def test_factory_scc_forwarded_before_openpilot_ownership(self):
+    for addr in self.SCC_ADDRS:
+      self.assertEqual(self.safety.safety_fwd_hook(2, addr), 0)
+
+  def test_accepted_scc12_arms_ownership_and_timeout_restores(self):
+    self.safety.set_controls_allowed(True)
+    self.assertTrue(self.safety.safety_tx_hook(self._accel_msg(0.0)))
+    for addr in self.SCC_ADDRS:
+      self.assertEqual(self.safety.safety_fwd_hook(2, addr), -1)
+
+    self.safety.set_timer(1_000_000 + self.TIMEOUT_US - 1)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x421), -1)
+    self.safety.set_timer(1_000_000 + self.TIMEOUT_US)
+    for addr in self.SCC_ADDRS:
+      self.assertEqual(self.safety.safety_fwd_hook(2, addr), 0)
+
+  def test_rejected_scc12_does_not_claim_ownership(self):
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self.safety.safety_tx_hook(self._accel_msg(3.0)))
+    for addr in self.SCC_ADDRS:
+      self.assertEqual(self.safety.safety_fwd_hook(2, addr), 0)
+
+  def test_factory_fca_is_never_claimed(self):
+    self.safety.set_controls_allowed(True)
+    self.assertTrue(self.safety.safety_tx_hook(self._accel_msg(0.0)))
+    for addr in self.FCA_ADDRS:
+      self.assertEqual(self.safety.safety_fwd_hook(2, addr), 0)
+
+  def test_non_nexo_longitudinal_keeps_static_scc_block(self):
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.LONG)
+    self.safety.init_tests()
+    for addr in self.SCC_ADDRS:
+      self.assertEqual(self.safety.safety_fwd_hook(2, addr), -1)
+
+
 if __name__ == "__main__":
   unittest.main()
