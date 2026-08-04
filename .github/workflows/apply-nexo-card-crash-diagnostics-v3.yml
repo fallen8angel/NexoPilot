@@ -1,0 +1,55 @@
+name: Apply NEXO card diagnostics v3
+
+on:
+  push:
+    branches:
+      - agent/nexo-card-crash-diagnostics-v3
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-nexo-card-crash-diagnostics-v3
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/nexo-card-crash-diagnostics-v3
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply patch
+        run: python tools/apply_nexo_card_crash_diagnostics_v3.py
+
+      - name: Validate NEXO integration and diagnostics
+        run: |
+          python tools/check_nexo_integration.py
+          python tools/check_nexo_post_radar_guard.py
+          python tools/check_nexo_diagnostics.py
+          python tools/check_nexo_uds_failure_policy.py
+          python tools/check_nexo_dbc_contract.py
+
+      - name: Commit generated files
+        run: |
+          git config user.name "NexoPilot CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "Keep NEXO card alive and capture crash traceback"
+          git push origin HEAD:agent/nexo-card-crash-diagnostics-v3
