@@ -2,8 +2,7 @@
 """NexoPilot web entry point.
 
 The full web implementation remains in web_core.py. Diagnostics overrides live
-in web_diagnostics_patch.py so false-positive filtering can evolve without
-mixing it into the vehicle settings and update server.
+in separate modules so vehicle settings and the update server remain isolated.
 
 Delegated validation contract retained for the NEXO integration checker:
   sub_sock("selfdriveState"
@@ -27,12 +26,12 @@ import threading
 import time
 from http.server import ThreadingHTTPServer
 
+from system.nexo_web import nexo_diagnostics_v2 as diagnostics_v2
 from system.nexo_web import web_core as core
 from system.nexo_web import web_diagnostics_patch as diagnostics
 
 
-_original_raw_can_diagnostic_output = core.raw_can_diagnostic_output
-_original_longitudinal_blackbox_output = core.longitudinal_blackbox_output
+_original_diagnostic_page = core.diagnostic_page
 
 
 def important_log_output() -> str:
@@ -40,17 +39,22 @@ def important_log_output() -> str:
 
 
 def raw_can_diagnostic_output() -> str:
-  return diagnostics.annotate_raw_can(_original_raw_can_diagnostic_output())
+  return diagnostics.annotate_raw_can(diagnostics_v2.raw_can_diagnostic_output(core))
 
 
 def longitudinal_blackbox_output(duration: float = 8.0) -> str:
-  return diagnostics.annotate_blackbox(_original_longitudinal_blackbox_output(duration))
+  return diagnostics.annotate_blackbox(diagnostics_v2.longitudinal_blackbox_output(core, duration))
+
+
+def diagnostic_page(message: str = "") -> str:
+  return diagnostics_v2.enhance_diagnostic_page(_original_diagnostic_page(message))
 
 
 core.important_log_output = important_log_output
 core.raw_can_diagnostic_output = raw_can_diagnostic_output
 core.longitudinal_blackbox_output = longitudinal_blackbox_output
-core.Handler.server_version = "NexoPilotWeb/6.3"
+core.diagnostic_page = diagnostic_page
+core.Handler.server_version = "NexoPilotWeb/7.0"
 
 
 class StableThreadingHTTPServer(ThreadingHTTPServer):
