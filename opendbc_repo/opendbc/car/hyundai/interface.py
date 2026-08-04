@@ -214,4 +214,13 @@ class CarInterface(CarInterfaceBase):
     communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
                                    0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
                                    uds.MESSAGE_TYPE.NORMAL])
+
+    # NEXO restoration must only re-enable the factory SCC stream. Calling init()
+    # here would run the radar programming sequence again while handling a fault.
+    if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and CP.openpilotLongitudinalControl:
+      addr, bus = 0x7D0, 0
+      restored = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+      _trace_nexo_long_init(f"DEINIT stock SCC communication restore acknowledged={restored}")
+      return
+
     CarInterface.init(CP, can_recv, can_send, communication_control)

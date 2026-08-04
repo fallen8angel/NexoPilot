@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import time
 from collections import Counter
 from datetime import datetime
@@ -14,6 +15,8 @@ from opendbc.car.hyundai.values import CAR, DBC as HYUNDAI_DBC
 
 
 NEXO_LAST_FAULT_LOG = Path("/data/nexo_last_fault.txt")
+NEXO_CARD_CRASH_LOG = Path("/data/nexo_card_crash.txt")
+NEXO_LONG_SUCCESS_LOG = Path("/data/nexo_long_success.txt")
 NEXO_SCC_ADDRS = frozenset((0x389, 0x420, 0x421, 0x50A))
 NEXO_FCA_ADDRS = frozenset((0x38D, 0x483))
 NEXO_DIAGNOSTIC_ADDRS = NEXO_SCC_ADDRS | NEXO_FCA_ADDRS | frozenset((0x4A2,))
@@ -64,12 +67,73 @@ def decode_payload(address: int, dat: bytes) -> str:
     return f"DBC 해석 실패: {error}"
 
 
-def last_fault_output() -> str:
+def _json_log(path: Path) -> dict[str, object] | None:
   try:
-    output = NEXO_LAST_FAULT_LOG.read_text(encoding="utf-8", errors="replace")
-  except OSError:
-    return "저장된 자동 복구 기록이 없습니다."
-  return output[-60000:] or "자동 복구 기록이 비어 있습니다."
+    return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+  except (OSError, json.JSONDecodeError):
+    return None
+
+
+def _record_freshness(core, payload: dict[str, object] | None) -> str:
+  if not payload:
+    return "기록 없음"
+  current = core.git_value("rev-parse", "--short", "HEAD")
+  recorded = str(payload.get("git_commit", ""))
+  if recorded and current != "확인 불가" and not recorded.startswith(current) and not current.startswith(recorded[:9]):
+    return f"과거 버전 기록 (기록 {recorded[:9]}, 현재 {current[:9]})"
+  return "현재 버전 기록 후보"
+
+
+def last_fault_output(core) -> str:
+  payload = _json_log(NEXO_LAST_FAULT_LOG)
+  if payload is None:
+    return "저장된 롱컨 실패 기록이 없습니다."
+  freshness = _record_freshness(core, payload)
+  return f"[{freshness}]" + chr(10) + json.dumps(payload, ensure_ascii=False, indent=2)[-60000:]
+
+
+def card_crash_output(core) -> str:
+  payload = _json_log(NEXO_CARD_CRASH_LOG)
+  if payload is None:
+    return "저장된 card Python crash traceback이 없습니다."
+  freshness = _record_freshness(core, payload)
+  return f"[{freshness}]" + chr(10) + json.dumps(payload, ensure_ascii=False, indent=2)[-60000:]
+
+
+def runtime_status_output(core) -> str:
+  params = core.Params()
+  def value(key: str) -> str:
+    try:
+      raw = params.get(key)
+      if raw is None:
+        return ""
+      return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+    except Exception:
+      return ""
+
+  code, processes = core.run_command(["ps", "-eo", "pid,args"], timeout=3)
+  card_processes = [] if code != 0 else [
+    line.strip() for line in processes.splitlines()
+    if "selfdrive.car.card" in line or "./card" in line
+  ]
+  heartbeat = value("NexoCardHeartbeatMono")
+  try:
+    heartbeat_age = max(0.0, time.monotonic() - float(heartbeat))
+    heartbeat_text = f"{heartbeat_age:.1f}초 전"
+  except Exception:
+    heartbeat_text = "확인 불가"
+
+  success = _json_log(NEXO_LONG_SUCCESS_LOG)
+  lines = [
+    f"card 프로세스: {'실행 중' if card_processes else '실행 중 아님'}",
+    *(card_processes[:4] or ["프로세스 행 없음"]),
+    f"card heartbeat: {heartbeat_text}",
+    f"세션 상태: {value('NexoCardSessionState') or '확인 불가'}",
+    f"마지막 단계: {value('NexoCardStage') or '확인 불가'}",
+    f"현재 실패 이유: {value('NexoCardSessionReason') or value('NexoLongitudinalFailure') or '없음'}",
+    f"마지막 성공 기록: {json.dumps(success, ensure_ascii=False) if success else '없음'}",
+  ]
+  return chr(10).join(lines)
 
 
 def _drain_sendcan(sock, requested: Counter[int]) -> None:
@@ -200,7 +264,9 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     lines.append("해석할 SCC/FCA 메시지가 없습니다.")
 
   lines.extend(["", "[롱컨 초기화·UDS 추적]", core.nexo_long_init_output()])
-  lines.extend(["", "[마지막 롱컨 실패 기록]", last_fault_output()])
+  lines.extend(["", "[card 런타임 상태]", runtime_status_output(core)])
+  lines.extend(["", "[마지막 롱컨 실패 기록]", last_fault_output(core)])
+  lines.extend(["", "[마지막 card crash traceback]", card_crash_output(core)])
   lines.extend(["", "[핵심 오류 로그]", core.important_log_output()])
   return "\n".join(lines)
 
@@ -262,9 +328,16 @@ def enhance_diagnostic_page(page: str) -> str:
     "순정 SCC 통신 중지 → NEXOdriveAI 레이더 트랙 설정 → 런타임 SCC 감시 순서와 UDS 요청·응답·소요시간을 보여줍니다.",
   ).replace("<h2>롱컨 초기화 추적</h2>", "<h2>롱컨 초기화·UDS 추적</h2>")
   marker = '<div class="card"><h2>핵심 오류 요약</h2>'
+  core = __import__("system.nexo_web.web_core", fromlist=["*"])
+  runtime_card = (
+    '<div class="card"><h2>card 런타임·종료 진단</h2>'
+    '<p class="desc">card 생존 여부와 heartbeat 및 마지막 실행 단계와 Python traceback을 구분해 표시합니다.</p>'
+    f'<pre>{html.escape(runtime_status_output(core))}' + chr(10) + chr(10) +
+    f'{html.escape(card_crash_output(core))}</pre></div>'
+  )
   fault_card = (
     '<div class="card"><h2>마지막 롱컨 실패 기록</h2>'
-    '<p class="desc">순정 SCC 재등장 또는 초기화 실패 직전 상태와 최근 5초 CAN 기록입니다. 설정 자동해제나 자동 재부팅 없이 저장됩니다.</p>'
-    f'<pre>{html.escape(last_fault_output())}</pre></div>'
+    '<p class="desc">현재 Git과 다른 과거 기록은 과거 버전 기록으로 표시합니다. 설정 자동해제나 자동 재부팅 없이 저장됩니다.</p>'
+    f'<pre>{html.escape(last_fault_output(core))}</pre></div>'
   )
-  return page.replace(marker, fault_card + marker, 1)
+  return page.replace(marker, runtime_card + fault_card + marker, 1)

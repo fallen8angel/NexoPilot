@@ -188,7 +188,9 @@ def validate_recovery() -> None:
     'params.put("NexoLongitudinalFailure", reason, block=True)',
     "self.nexo_long_init_failed",
     "self._handle_nexo_long_failure(error)",
-    "self.CI.deinit(self.CP, *self.can_callbacks)",
+    "record_nexo_card_crash",
+    "record_nexo_long_success",
+    "NexoCardHeartbeatMono",
     "NexoStockSccRuntimeGuard",
     "self.nexo_stock_scc_guard.arm()",
     "self.nexo_stock_scc_guard.disarm()",
@@ -196,6 +198,9 @@ def validate_recovery() -> None:
   )
   for token in required:
     require(token in source, f"NEXO failure latch missing: {token}")
+
+  require("self.CI.deinit(self.CP, *self.can_callbacks)" not in source,
+          "card failure latch must not re-enter NEXO radar diagnostics")
 
   recovery = source[source.index("def recover_nexo_stock_cruise"):source.index("def can_comm_callbacks")]
   for forbidden in ("AlphaLongitudinalEnabled", "ExperimentalMode", "DoReboot", "CarParamsCache"):
