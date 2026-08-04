@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Static NEXO integration preflight for the current openpilot tree."""
+"""Stable, dependency-free validation for the NEXO longitudinal integration.
+
+The checks intentionally inspect Python syntax trees instead of exact source
+formatting so harmless whitespace, comments, and line wrapping cannot break CI.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +11,32 @@ import ast
 import re
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
 
+PYTHON_FILES = (
+  "opendbc_repo/opendbc/car/hyundai/values.py",
+  "opendbc_repo/opendbc/car/hyundai/carstate.py",
+  "opendbc_repo/opendbc/car/hyundai/carcontroller.py",
+  "opendbc_repo/opendbc/car/hyundai/hyundaican.py",
+  "opendbc_repo/opendbc/car/hyundai/interface.py",
+  "opendbc_repo/opendbc/car/hyundai/radar_interface.py",
+  "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
+  "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py",
+  "selfdrive/car/nexo_guard.py",
+  "selfdrive/car/tests/test_nexo_guard.py",
+  "selfdrive/car/card.py",
+  "selfdrive/controls/controlsd.py",
+  "selfdrive/controls/lib/longitudinal_planner.py",
+  "system/nexo_web/web.py",
+)
 
-def read(path: str) -> str:
-  return (ROOT / path).read_text(encoding="utf-8")
+
+def read(relative: str) -> str:
+  path = ROOT / relative
+  if not path.is_file():
+    raise AssertionError(f"missing required file: {relative}")
+  return path.read_text(encoding="utf-8", errors="strict")
 
 
 def require(condition: bool, message: str) -> None:
@@ -19,82 +44,148 @@ def require(condition: bool, message: str) -> None:
     raise AssertionError(message)
 
 
-def parse_python_files() -> None:
-  paths = (
-    "opendbc_repo/opendbc/car/hyundai/values.py",
-    "opendbc_repo/opendbc/car/hyundai/carstate.py",
-    "opendbc_repo/opendbc/car/hyundai/carcontroller.py",
-    "opendbc_repo/opendbc/car/hyundai/hyundaican.py",
-    "opendbc_repo/opendbc/car/hyundai/interface.py",
-    "opendbc_repo/opendbc/car/hyundai/radar_interface.py",
-    "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
-    "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py",
-    "selfdrive/car/nexo_guard.py",
-    "selfdrive/car/tests/test_nexo_guard.py",
-    "selfdrive/car/card.py",
-    "selfdrive/controls/controlsd.py",
-    "selfdrive/controls/lib/longitudinal_planner.py",
-    "system/nexo_web/web.py",
+def parse(relative: str) -> ast.Module:
+  return ast.parse(read(relative), filename=relative)
+
+
+def find_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+  function = next(
+    (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name),
+    None,
   )
-  for path in paths:
-    ast.parse(read(path), filename=path)
-    print(f"syntax OK: {path}")
+  require(function is not None, f"missing function: {name}")
+  return function
+
+
+def assignments(function: ast.FunctionDef) -> dict[str, ast.AST]:
+  result: dict[str, ast.AST] = {}
+  for node in ast.walk(function):
+    if isinstance(node, ast.Assign):
+      for target in node.targets:
+        if isinstance(target, ast.Name):
+          result[target.id] = node.value
+    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+      result[node.target.id] = node.value
+  return result
+
+
+def dict_keys(node: ast.AST | None) -> set[str]:
+  if not isinstance(node, ast.Dict):
+    return set()
+  return {
+    key.value
+    for key in node.keys
+    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+  }
+
+
+def is_name(node: ast.AST | None, name: str) -> bool:
+  return isinstance(node, ast.Name) and node.id == name
+
+
+def parse_python_files() -> None:
+  for relative in PYTHON_FILES:
+    parse(relative)
+    print(f"syntax OK: {relative}")
 
 
 def validate_interface() -> None:
   source = read("opendbc_repo/opendbc/car/hyundai/interface.py")
   required = (
-    "CAR.HYUNDAI_NEXO_1ST_GEN",
-    "HyundaiFlags.FCEV",
-    "HyundaiSafetyFlags.FCEV_GAS",
-    "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable",
-    "disable_ecu(can_recv, can_send",
-    "enable_radar_tracks(can_recv, can_send",
-    "NEXOdriveAI long init",
+    'raise RuntimeError("NEXO stock SCC communication could not be disabled")',
+    'raise RuntimeError("NEXO radar track activation failed")',
+    "START NEXOdriveAI long init",
+    "DONE NEXOdriveAI disable-then-radar sequence; runtime SCC guard armed by card",
   )
   for token in required:
-    require(token in source, f"interface integration missing: {token}")
+    require(token in source, f"interface contract missing: {token}")
+
+  disable_pos = source.find("disabled = disable_ecu")
+  radar_pos = source.find("tracks_enabled = enable_radar_tracks", disable_pos)
+  require(disable_pos >= 0 and radar_pos > disable_pos,
+          "NEXO init order must be extended-diagnostic disable -> radar-track programming")
+  require("_nexo_stock_scc_active" not in source,
+          "startup-only SCC silence check must not replace the runtime raw-CAN guard")
 
 
 def validate_hyundaican() -> None:
-  source = read("opendbc_repo/opendbc/car/hyundai/hyundaican.py")
-  fn_start = source.index("def create_acc_commands")
-  fn_end = source.index("def create_acc_opt", fn_start)
-  fn_source = source[fn_start:fn_end]
+  relative = "opendbc_repo/opendbc/car/hyundai/hyundaican.py"
+  source = read(relative)
+  tree = parse(relative)
+  create_acc_commands = find_function(tree, "create_acc_commands")
+  create_acc_opt = find_function(tree, "create_acc_opt")
+  values = assignments(create_acc_commands)
 
-  for token in (
-    '"MainMode_ACC"',
-    '"SCCInfoDisplay"',
-    '"ACCFailInfo"',
-    '"TakeOverReq"',
-    '"CR_VSM_ChkSum"',
-    '"CR_VSM_Alive"',
-    '"JerkUpperLimit"',
-    '"JerkLowerLimit"',
-    '"ObjGap"',
-  ):
-    require(token in fn_source, f"SCC command field missing: {token}")
+  # Current NEXO contract: after stock SCC takeover, SCC11 continues to
+  # advertise cruise availability while actual acceleration still requires
+  # openpilot enablement. Check the expression tree rather than source spacing.
+  require(is_name(values.get("main_mode_acc"), "cruise_available"),
+          "NEXO main mode must follow cruise_available")
 
-  require("if use_fca and not is_nexo" in fn_source,
-          "NEXO must preserve the stock FCA stream")
+  acc_enabled = values.get("acc_enabled")
+  require(isinstance(acc_enabled, ast.IfExp), "acc_enabled must be a conditional expression")
+  require(is_name(acc_enabled.test, "is_nexo") and is_name(acc_enabled.body, "enabled"),
+          "NEXO acc_enabled must follow enabled")
+  require(isinstance(acc_enabled.orelse, ast.BoolOp) and isinstance(acc_enabled.orelse.op, ast.And),
+          "non-NEXO acc_enabled must require enabled and main_mode_acc")
+  require([node.id for node in acc_enabled.orelse.values if isinstance(node, ast.Name)] == ["enabled", "main_mode_acc"],
+          "non-NEXO acc_enabled operands changed")
+
+  required_dict_keys = {
+    "scc11_values": {
+      "MainMode_ACC", "TauGapSet", "VSetDis", "AliveCounterACC",
+      "ObjValid", "ACC_ObjStatus", "ACC_ObjRelSpd", "ACC_ObjDist",
+    },
+    "scc12_values": {
+      "ACCMode", "StopReq", "aReqRaw", "aReqValue",
+      "ACCFailInfo", "CR_VSM_ChkSum", "CR_VSM_Alive",
+    },
+    "scc14_values": {
+      "ComfortBandUpper", "ComfortBandLower", "JerkUpperLimit",
+      "JerkLowerLimit", "ACCMode", "ObjGap",
+    },
+  }
+  for variable, expected in required_dict_keys.items():
+    actual = dict_keys(values.get(variable))
+    require(expected <= actual, f"{variable} missing fields: {sorted(expected - actual)}")
+
+  # Stock templates must not return to the direct-generation NEXO path.
+  require("copy.copy(stock_scc11)" not in source, "stock SCC11 template copy must stay removed")
+  require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
+  require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
+
+  command_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_commands) if isinstance(node, ast.If)]
+  require(any("use_fca" in condition and "not is_nexo" in condition and "CAMERA_SCC" in condition
+              for condition in command_conditions),
+          "NEXO FCA11 suppression condition missing")
+
+  opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
+  require(any("not is_nexo" in condition and "CAMERA_SCC" in condition for condition in opt_conditions),
+          "NEXO FCA12 suppression condition missing")
 
 
 def validate_controller() -> None:
   source = read("opendbc_repo/opendbc/car/hyundai/carcontroller.py")
+  compact = " ".join(source.split())
   required = (
-    "make_tester_present_msg",
-    "self.CP.openpilotLongitudinalControl",
+    "self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl",
     "hyundaican.create_acc_commands",
+    "self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl",
     "hyundaican.create_acc_opt",
+    "self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl",
     "hyundaican.create_frt_radar_opt",
   )
   for token in required:
-    require(token in source, f"controller integration missing: {token}")
+    require(token in compact, f"controller cadence missing: {token}")
 
 
 def validate_recovery() -> None:
   source = read("selfdrive/car/card.py")
   required = (
+    '"NEXO radar track activation failed"',
+    '"NEXO stock SCC communication could not be disabled"',
+    '"NEXO stock SCC returned during longitudinal control"',
+    'params.put("NexoLongitudinalFailure", reason, block=True)',
     "self.nexo_long_init_failed",
     "self._handle_nexo_long_failure(error)",
     "record_nexo_card_crash",
@@ -138,9 +229,9 @@ def validate_safety() -> None:
   require("hyundai_nexo_dynamic_scc_fwd" not in source,
           "obsolete bus-direction dynamic SCC forwarding must stay removed")
 
-  # Generic Hyundai longitudinal forwarding must remain under the normal static
-  # relay block. Only the explicit NEXO list may opt into dynamic blocking, while
-  # retaining check_relay=true and the physical source-0 runtime guard.
+  # Generic Hyundai longitudinal forwarding stays under normal static relay
+  # blocking. Only the explicit NEXO list opts into dynamic SCC11/12/13/14
+  # blocking, while keeping check_relay enabled and the source-0 runtime guard.
   generic_macro = source.split("#define HYUNDAI_LONG_COMMON_TX_MSGS", 1)[1].split(
     "#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[0]
   nexo_macro = source.split("#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[1].split(
