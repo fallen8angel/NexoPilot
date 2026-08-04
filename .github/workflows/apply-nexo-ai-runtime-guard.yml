@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - agent/nexo-ai-runtime-scc-guard
+  pull_request:
+    branches:
+      - NEXO
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-nexo-ai-runtime-guard
+  group: apply-nexo-ai-runtime-guard-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +25,7 @@ jobs:
       - name: Checkout full history
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - name: Setup Python
