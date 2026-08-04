@@ -13,11 +13,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: apply-nexo-ai-runtime-guard-${{ github.ref }}
+  group: apply-nexo-ai-runtime-guard
   cancel-in-progress: true
 
 jobs:
   apply:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -34,11 +35,12 @@ jobs:
           python-version: "3.12"
 
       - name: Apply patch
-        run: PYTHONPATH=tools python tools/apply_nexo_ai_runtime_guard_v3.py
+        run: PYTHONPATH=tools python tools/apply_nexo_ai_runtime_guard_v4.py
 
       - name: Validate integration
         run: |
           python tools/check_nexo_integration.py
+          python tools/check_nexo_post_radar_guard.py
           PYTHONPATH=. python -m unittest selfdrive.car.tests.test_nexo_guard
           python tools/check_nexo_dbc_contract.py
 
