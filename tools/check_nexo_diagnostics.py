@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+DIAGNOSTIC_FILES = (
+  "selfdrive/car/nexo_guard.py",
+  "selfdrive/car/nexo_diagnostics.py",
+  "selfdrive/car/card.py",
+  "system/nexo_web/web.py",
+  "system/nexo_web/nexo_diagnostics_v2.py",
+  "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
+  "opendbc_repo/opendbc/car/hyundai/interface.py",
+)
 
 
 def require(value: bool, message: str) -> None:
@@ -14,13 +25,18 @@ def text(path: str) -> str:
 
 
 def main() -> None:
-  guard = text("selfdrive/car/nexo_guard.py")
-  card = text("selfdrive/car/card.py")
-  writer = text("selfdrive/car/nexo_diagnostics.py")
-  web = text("system/nexo_web/nexo_diagnostics_v2.py")
-  entry = text("system/nexo_web/web.py")
-  radar = text("opendbc_repo/opendbc/car/hyundai/radar_tracks.py")
-  interface = text("opendbc_repo/opendbc/car/hyundai/interface.py")
+  sources = {path: text(path) for path in DIAGNOSTIC_FILES}
+  for path, source in sources.items():
+    ast.parse(source, filename=path)
+    print(f"syntax OK: {path}")
+
+  guard = sources["selfdrive/car/nexo_guard.py"]
+  writer = sources["selfdrive/car/nexo_diagnostics.py"]
+  card = sources["selfdrive/car/card.py"]
+  entry = sources["system/nexo_web/web.py"]
+  web = sources["system/nexo_web/nexo_diagnostics_v2.py"]
+  radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
+  interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
 
   for token in ("NEXO_FCA_ADDRS", "NEXO_CAN_HISTORY_S = 5.0", "fault_snapshot", "recent_can"):
     require(token in guard, f"runtime diagnostic guard missing: {token}")
