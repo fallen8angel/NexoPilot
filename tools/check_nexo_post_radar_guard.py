@@ -25,10 +25,16 @@ def find_function(tree: ast.Module, name: str) -> ast.FunctionDef:
 
 def constant_value(tree: ast.Module, name: str):
   for node in tree.body:
-    if isinstance(node, ast.Assign):
-      for target in node.targets:
-        if isinstance(target, ast.Name) and target.id == name:
-          return ast.literal_eval(node.value)
+    if not isinstance(node, ast.Assign):
+      continue
+    for target in node.targets:
+      if not (isinstance(target, ast.Name) and target.id == name):
+        continue
+      value = node.value
+      if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "frozenset":
+        require(len(value.args) == 1, f"unsupported frozenset constant: {name}")
+        return frozenset(ast.literal_eval(value.args[0]))
+      return ast.literal_eval(value)
   raise AssertionError(f"missing constant: {name}")
 
 
@@ -74,7 +80,8 @@ def main() -> None:
   for token in ("msg.src == scc_bus", "NEXO_STOCK_SCC_ADDRS", "NEXO_RADAR_TRACK_ADDRS", "msg.src < 128"):
     require(token in verify_source, f"post-track verification contract missing: {token}")
 
-  require("return False" in ast.get_source_segment(source, enable),
+  enable_source = ast.get_source_segment(source, enable) or ""
+  require("return False" in enable_source,
           "failed final verification must fall back instead of enabling long control")
   print("NEXO post-radar SCC guard PASS")
 
