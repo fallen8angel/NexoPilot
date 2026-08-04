@@ -32,10 +32,10 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
 
 #define HYUNDAI_LONG_COMMON_TX_MSGS(scc_bus) \
   HYUNDAI_COMMON_TX_MSGS(scc_bus) \
-  {0x420, 0,       8, .check_relay = true},   /* SCC11 Bus 0       */ \
-  {0x421, 0,       8, .check_relay = true},   /* SCC12 Bus 0       */ \
-  {0x50A, 0,       8, .check_relay = true},   /* SCC13 Bus 0       */ \
-  {0x389, 0,       8, .check_relay = true},   /* SCC14 Bus 0       */ \
+  {0x420, 0,       8, .check_relay = true, .disable_static_blocking = true},   /* SCC11 Bus 0 */ \
+  {0x421, 0,       8, .check_relay = true, .disable_static_blocking = true},   /* SCC12 Bus 0 */ \
+  {0x50A, 0,       8, .check_relay = true, .disable_static_blocking = true},   /* SCC13 Bus 0 */ \
+  {0x389, 0,       8, .check_relay = true, .disable_static_blocking = true},   /* SCC14 Bus 0 */ \
   {0x4A2, 0,       2, .check_relay = false},  /* FRT_RADAR11 Bus 0 */ \
 
 #define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
@@ -57,6 +57,25 @@ static const CanMsg HYUNDAI_TX_MSGS[] = {
 };
 
 static bool hyundai_legacy = false;
+
+// NEXO is currently the only Hyundai FCEV platform in this integration. Keep
+// relay-malfunction checks, but suppress camera-side stock SCC forwarding only
+// while valid openpilot SCC frames are being sent. Stock forwarding resumes
+// after 200 ms if openpilot stops transmitting.
+static bool hyundai_nexo_dynamic_scc_fwd = false;
+static bool hyundai_nexo_scc_tx_seen = false;
+static bool hyundai_nexo_fca_tx_seen = false;
+static uint32_t hyundai_nexo_scc_last_tx = 0U;
+static uint32_t hyundai_nexo_fca_last_tx = 0U;
+static const uint32_t HYUNDAI_NEXO_FWD_TIMEOUT_US = 200000U;
+
+static bool hyundai_nexo_is_scc_addr(const int addr) {
+  return (addr == 0x389) || (addr == 0x420) || (addr == 0x421) || (addr == 0x50A);
+}
+
+static bool hyundai_nexo_is_fca_addr(const int addr) {
+  return (addr == 0x38D) || (addr == 0x483);
+}
 
 static uint8_t hyundai_get_counter(const CANPacket_t *msg) {
 
@@ -245,6 +264,18 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  if (tx && hyundai_nexo_dynamic_scc_fwd && (msg->bus == 0U)) {
+    const uint32_t now = microsecond_timer_get();
+    if (hyundai_nexo_is_scc_addr(msg->addr)) {
+      hyundai_nexo_scc_tx_seen = true;
+      hyundai_nexo_scc_last_tx = now;
+    } else if (hyundai_nexo_is_fca_addr(msg->addr)) {
+      hyundai_nexo_fca_tx_seen = true;
+      hyundai_nexo_fca_last_tx = now;
+    } else {
+    }
+  }
+
   return tx;
 }
 
@@ -266,6 +297,11 @@ static safety_config hyundai_init(uint16_t param) {
 
   hyundai_common_init(param);
   hyundai_legacy = false;
+  hyundai_nexo_dynamic_scc_fwd = hyundai_longitudinal && hyundai_fcev_gas_signal;
+  hyundai_nexo_scc_tx_seen = false;
+  hyundai_nexo_fca_tx_seen = false;
+  hyundai_nexo_scc_last_tx = 0U;
+  hyundai_nexo_fca_last_tx = 0U;
 
   safety_config ret;
   if (hyundai_longitudinal) {
@@ -319,6 +355,29 @@ static safety_config hyundai_init(uint16_t param) {
   return ret;
 }
 
+static bool hyundai_fwd_hook(int bus_num, int addr) {
+  // SCC messages travel from the camera-side bus 2 toward powertrain bus 0.
+  // Other Hyundai longitudinal modes retain their existing always-block policy.
+  if ((bus_num == 2) && hyundai_longitudinal && hyundai_nexo_is_scc_addr(addr)) {
+    if (!hyundai_nexo_dynamic_scc_fwd) {
+      return true;
+    }
+
+    const uint32_t now = microsecond_timer_get();
+    return hyundai_nexo_scc_tx_seen &&
+           (safety_get_ts_elapsed(now, hyundai_nexo_scc_last_tx) < HYUNDAI_NEXO_FWD_TIMEOUT_US);
+  }
+
+  // NEXO preserves stock FCA unless a valid openpilot FCA frame was accepted.
+  if ((bus_num == 2) && hyundai_nexo_dynamic_scc_fwd && hyundai_nexo_is_fca_addr(addr)) {
+    const uint32_t now = microsecond_timer_get();
+    return hyundai_nexo_fca_tx_seen &&
+           (safety_get_ts_elapsed(now, hyundai_nexo_fca_last_tx) < HYUNDAI_NEXO_FWD_TIMEOUT_US);
+  }
+
+  return false;
+}
+
 static safety_config hyundai_legacy_init(uint16_t param) {
   // older hyundai models have less checks due to missing counters and checksums
   static RxCheck hyundai_legacy_rx_checks[] = {
@@ -330,6 +389,9 @@ static safety_config hyundai_legacy_init(uint16_t param) {
   hyundai_legacy = true;
   hyundai_longitudinal = false;
   hyundai_camera_scc = false;
+  hyundai_nexo_dynamic_scc_fwd = false;
+  hyundai_nexo_scc_tx_seen = false;
+  hyundai_nexo_fca_tx_seen = false;
   return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TX_MSGS);
 }
 
@@ -337,6 +399,7 @@ const safety_hooks hyundai_hooks = {
   .init = hyundai_init,
   .rx = hyundai_rx_hook,
   .tx = hyundai_tx_hook,
+  .fwd = hyundai_fwd_hook,
   .get_counter = hyundai_get_counter,
   .get_checksum = hyundai_get_checksum,
   .compute_checksum = hyundai_compute_checksum,

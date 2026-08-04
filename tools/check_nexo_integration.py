@@ -199,6 +199,11 @@ def validate_safety() -> None:
   source = read("opendbc_repo/opendbc/safety/modes/hyundai.h")
   require("HYUNDAI_LONG_COMMON_TX_MSGS" in source, "longitudinal TX allowlist missing")
   require("longitudinal_accel_checks" in source, "longitudinal acceleration safety check missing")
+  require("hyundai_nexo_dynamic_scc_fwd" in source, "NEXO dynamic SCC forwarding state missing")
+  require("HYUNDAI_NEXO_FWD_TIMEOUT_US" in source, "NEXO forwarding failover timeout missing")
+  require(".fwd = hyundai_fwd_hook" in source, "Hyundai forwarding hook registration missing")
+  require(".disable_static_blocking = true" in source, "dynamic SCC static-block opt-out missing")
+  require("hyundai_nexo_scc_tx_seen" in source, "NEXO SCC TX liveness tracking missing")
 
   for address in ("0x38D", "0x483", "0x7D0"):
     pattern = rf"\{{\s*{address}\s*,\s*0\s*,\s*8\s*,\s*\.check_relay\s*=\s*false\s*\}}"

@@ -272,11 +272,33 @@ class TestHyundaiLongitudinalSafetyCameraSCC(HyundaiLongitudinalBase, TestHyunda
 
 
 class TestHyundaiSafetyFCEVLong(TestHyundaiLongitudinalSafety, TestHyundaiSafetyFCEV):
+  # NEXO dynamically blocks stock SCC only while openpilot is actively sending.
+  FWD_BLACKLISTED_ADDRS = {2: [0x340, 0x485]}
+
   def setUp(self):
     self.packer = CANPackerSafety("hyundai_can_generated")
     self.safety = libsafety_py.libsafety
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.FCEV_GAS | HyundaiSafetyFlags.LONG)
     self.safety.init_tests()
+
+  def test_nexo_dynamic_scc_forwarding(self):
+    scc_addrs = (0x389, 0x420, 0x421, 0x50A)
+
+    for addr in scc_addrs:
+      self.assertEqual(0, self.safety.safety_fwd_hook(2, addr))
+
+    self.safety.set_timer(1000000)
+    self.assertTrue(self._tx(self._accel_msg(0)))
+    for addr in scc_addrs:
+      self.assertEqual(-1, self.safety.safety_fwd_hook(2, addr))
+
+    self.safety.set_timer(1200001)
+    for addr in scc_addrs:
+      self.assertEqual(0, self.safety.safety_fwd_hook(2, addr))
+
+  def test_nexo_stock_fca_preserved_without_openpilot_fca(self):
+    for addr in (0x38D, 0x483):
+      self.assertEqual(0, self.safety.safety_fwd_hook(2, addr))
 
 
 if __name__ == "__main__":
