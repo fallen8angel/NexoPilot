@@ -48,3 +48,5 @@ jobs:
                   .github/workflows/apply-nexo-dynamic-forwarding.yml
           git commit -m "Add NEXO dynamic SCC forwarding failover"
           git push origin HEAD:agent/nexo-dynamic-scc-forwarding
+
+# Triggered after workflow installation so the one-shot patch can run.
