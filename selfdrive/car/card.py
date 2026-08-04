@@ -207,8 +207,6 @@ class Car:
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)
 
-    self.sm.update(0)
-
     can_rcv_valid = len(can_strs) > 0
 
     # Check for CAN timeout
