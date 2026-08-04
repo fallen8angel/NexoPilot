@@ -48,3 +48,10 @@ jobs:
 
       - name: Check NEXO AI SCC ownership
         run: python tools/check_nexo_ai_scc_ownership.py
+
+      - name: Install NEXO Panda safety test dependencies
+        run: python -m pip install --disable-pip-version-check numpy cffi parameterized pycapnp
+
+      - name: Test NEXO Panda SCC ownership
+        working-directory: opendbc_repo
+        run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiNexoDynamicSCCOwnership
