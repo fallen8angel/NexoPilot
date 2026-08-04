@@ -34,10 +34,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Apply card, interface and validator patches
+      - name: Apply diagnostics patches
         run: |
           python tools/apply_nexo_diagnostics_card.py
           python tools/patch_nexo_diagnostics_validator.py
+          python tools/finalize_nexo_diagnostics_code.py
 
       - name: Validate diagnostics
         run: |
@@ -64,5 +65,5 @@ jobs:
             echo "No generated changes"
             exit 0
           fi
-          git commit -m "Connect persistent NEXO fault diagnostics"
+          git commit -m "Finalize persistent NEXO fault diagnostics"
           git push origin HEAD:agent/nexo-diagnostics-v2
