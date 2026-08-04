@@ -34,8 +34,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Apply card and interface patch
-        run: python tools/apply_nexo_diagnostics_card.py
+      - name: Apply card, interface and validator patches
+        run: |
+          python tools/apply_nexo_diagnostics_card.py
+          python tools/patch_nexo_diagnostics_validator.py
 
       - name: Validate diagnostics
         run: |
@@ -57,7 +59,7 @@ jobs:
         run: |
           git config user.name "NexoPilot CI"
           git config user.email "actions@users.noreply.github.com"
-          git add selfdrive/car/card.py opendbc_repo/opendbc/car/hyundai/interface.py
+          git add selfdrive/car/card.py opendbc_repo/opendbc/car/hyundai/interface.py tools/check_nexo_integration.py
           if git diff --cached --quiet; then
             echo "No generated changes"
             exit 0
