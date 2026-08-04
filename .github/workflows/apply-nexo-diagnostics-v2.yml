@@ -1,0 +1,63 @@
+name: Apply NEXO diagnostics v2
+
+on:
+  push:
+    branches:
+      - agent/nexo-diagnostics-v2
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-nexo-diagnostics-v2
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/nexo-diagnostics-v2
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply card and interface patch
+        run: python tools/apply_nexo_diagnostics_card.py
+
+      - name: Validate diagnostics
+        run: |
+          python -m py_compile \
+            selfdrive/car/card.py \
+            selfdrive/car/nexo_guard.py \
+            selfdrive/car/nexo_diagnostics.py \
+            system/nexo_web/web.py \
+            system/nexo_web/nexo_diagnostics_v2.py \
+            opendbc_repo/opendbc/car/hyundai/interface.py \
+            opendbc_repo/opendbc/car/hyundai/radar_tracks.py
+          PYTHONPATH=. python -m unittest selfdrive.car.tests.test_nexo_guard
+          python tools/check_nexo_integration.py
+          python tools/check_nexo_post_radar_guard.py
+          python tools/check_nexo_diagnostics.py
+          python tools/check_nexo_dbc_contract.py
+
+      - name: Commit generated changes
+        run: |
+          git config user.name "NexoPilot CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add selfdrive/car/card.py opendbc_repo/opendbc/car/hyundai/interface.py
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "Connect persistent NEXO fault diagnostics"
+          git push origin HEAD:agent/nexo-diagnostics-v2
