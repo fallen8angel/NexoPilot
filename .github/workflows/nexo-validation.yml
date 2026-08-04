@@ -40,6 +40,9 @@ jobs:
       - name: Check NEXO diagnostics
         run: python tools/check_nexo_diagnostics.py
 
+      - name: Check NEXO Params registration
+        run: python tools/check_nexo_param_keys.py
+
       - name: Check NEXO UDS and failure policy
         run: python tools/check_nexo_uds_failure_policy.py
 
