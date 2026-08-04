@@ -1,0 +1,56 @@
+name: Apply NEXO AI SCC ownership v1
+
+on:
+  push:
+    branches:
+      - agent/nexo-ai-scc-ownership-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-nexo-ai-scc-ownership-v1
+  cancel-in-progress: false
+
+jobs:
+  apply-and-test:
+    if: ${{ !contains(github.event.head_commit.message, '[applied-ai-scc-v1]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/nexo-ai-scc-ownership-v1
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply patch
+        run: python tools/apply_nexo_ai_scc_ownership_v1.py
+
+      - name: Run static ownership validation
+        run: python tools/check_nexo_ai_scc_ownership.py
+
+      - name: Install safety-test dependencies
+        run: python -m pip install --disable-pip-version-check numpy cffi parameterized
+
+      - name: Run NEXO Panda ownership unit tests
+        working-directory: opendbc_repo
+        run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiNexoDynamicSCCOwnership
+
+      - name: Commit generated changes
+        run: |
+          if git diff --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Implement NEXO AI SCC ownership and compatibility [applied-ai-scc-v1]"
+          git push origin HEAD:agent/nexo-ai-scc-ownership-v1
