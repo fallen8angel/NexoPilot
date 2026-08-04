@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate-nexo-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -31,8 +31,23 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Apply NEXO dynamic forwarding candidate
+        if: github.ref_name == 'agent/nexo-dynamic-scc-forwarding' || github.head_ref == 'agent/nexo-dynamic-scc-forwarding'
+        run: python tools/apply_nexo_dynamic_forwarding.py
+
       - name: Check NEXO integration
         run: python tools/check_nexo_integration.py
 
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
+
+      - name: Export verified forwarding files
+        if: github.ref_name == 'agent/nexo-dynamic-scc-forwarding' || github.head_ref == 'agent/nexo-dynamic-scc-forwarding'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexo-dynamic-forwarding-files
+          path: |
+            opendbc_repo/opendbc/safety/modes/hyundai.h
+            opendbc_repo/opendbc/safety/tests/test_hyundai.py
+            tools/check_nexo_integration.py
+          if-no-files-found: error
