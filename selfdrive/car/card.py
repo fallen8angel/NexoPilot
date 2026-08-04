@@ -19,6 +19,7 @@ from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.car.nexo_diagnostics import record_nexo_fault_snapshot
 from openpilot.selfdrive.car.nexo_guard import NexoStockSccRuntimeGuard
 
 REPLAY = "REPLAY" in os.environ
@@ -91,7 +92,7 @@ class Car:
 
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
-    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents'])
+    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'selfdriveState', 'radarState'])
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'liveTracks'])
 
     self.can_rcv_cum_timeout_counter = 0
@@ -192,9 +193,11 @@ class Car:
 
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     can_list = can_capnp_to_list(can_strs)
+    self.sm.update(0)
 
     if self.nexo_stock_scc_guard.observe(can_list):
       error = RuntimeError("NEXO stock SCC returned during longitudinal control")
+      record_nexo_fault_snapshot(self.params, self.nexo_stock_scc_guard, self.sm, error)
       recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
       raise error
 
@@ -203,8 +206,6 @@ class Car:
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)
-
-    self.sm.update(0)
 
     can_rcv_valid = len(can_strs) > 0
 
@@ -265,6 +266,8 @@ class Car:
       try:
         self.CI.init(self.CP, *self.can_callbacks)
       except RuntimeError as error:
+        self.sm.update(0)
+        record_nexo_fault_snapshot(self.params, self.nexo_stock_scc_guard, self.sm, error)
         recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
         raise
       # Arm the raw-CAN guard only after the diagnostic takeover completed.

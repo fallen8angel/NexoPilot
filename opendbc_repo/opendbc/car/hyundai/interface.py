@@ -16,6 +16,16 @@ from opendbc.car.hyundai.radar_interface import RadarInterface
 ButtonType = structs.CarState.ButtonEvent.Type
 Ecu = structs.CarParams.Ecu
 NEXO_LONG_INIT_LOG = "/data/nexo_long_init.log"
+
+
+def _trace_nexo_long_init(message: str, reset: bool = False) -> None:
+  try:
+    with open(NEXO_LONG_INIT_LOG, "w" if reset else "a", encoding="utf-8") as trace:
+      trace.write(f"{time.monotonic():.3f} {message}\n")
+  except OSError:
+    pass
+
+
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
 
 
@@ -169,7 +179,13 @@ class CarInterface(CarInterfaceBase):
       if is_nexo and disabling_normal_comms:
         _trace_nexo_long_init(f"START NEXOdriveAI long init bus={bus} addr=0x{addr:x}", reset=True)
         _trace_nexo_long_init("STEP 1 enter extended diagnostics and suppress stock SCC")
+        disable_started = time.monotonic()
+        _trace_nexo_long_init(f"UDS TX ecu=0x{addr:X} bus={bus} requests=10 03 then 28 83 01")
         disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+        _trace_nexo_long_init(
+          f"UDS RESULT ecu=0x{addr:X} bus={bus} acknowledged={disabled} "
+          f"elapsed_ms={(time.monotonic() - disable_started) * 1000:.1f}"
+        )
         _trace_nexo_long_init(f"STEP 1 request completed={disabled}")
         if not disabled:
           _trace_nexo_long_init("FAIL stock SCC communication-control was not acknowledged")

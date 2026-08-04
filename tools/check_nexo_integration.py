@@ -203,7 +203,7 @@ def validate_runtime_guard() -> None:
     "NEXO_STOCK_SCC_SOURCE = 0",
     "class NexoStockSccRuntimeGuard",
     'getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE',
-    "len(self._timestamps) >= self.min_frames",
+    "len(self._detections) < self.min_frames",
   )
   for token in required:
     require(token in source, f"runtime SCC guard missing: {token}")
