@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/nexo-diagnostics-v2
+  pull_request:
+    branches:
+      - NEXO
   workflow_dispatch:
 
 permissions:
