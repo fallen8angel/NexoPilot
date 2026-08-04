@@ -1,0 +1,50 @@
+name: Apply NEXO dynamic forwarding
+
+on:
+  push:
+    branches:
+      - agent/nexo-dynamic-scc-forwarding
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/nexo-dynamic-scc-forwarding
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply NEXO-specific forwarding patch
+        run: python tools/apply_nexo_dynamic_forwarding.py
+
+      - name: Run deterministic NEXO preflight
+        run: python tools/check_nexo_integration.py
+
+      - name: Remove one-shot patch tooling
+        run: |
+          rm tools/apply_nexo_dynamic_forwarding.py
+          rm .github/workflows/apply-nexo-dynamic-forwarding.yml
+
+      - name: Commit verified integration
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add opendbc_repo/opendbc/safety/modes/hyundai.h \
+                  opendbc_repo/opendbc/safety/tests/test_hyundai.py \
+                  tools/check_nexo_integration.py \
+                  tools/apply_nexo_dynamic_forwarding.py \
+                  .github/workflows/apply-nexo-dynamic-forwarding.yml
+          git commit -m "Add NEXO dynamic SCC forwarding failover"
+          git push origin HEAD:agent/nexo-dynamic-scc-forwarding
