@@ -23,6 +23,8 @@ PYTHON_FILES = (
   "opendbc_repo/opendbc/car/hyundai/radar_interface.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
   "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py",
+  "selfdrive/car/nexo_guard.py",
+  "selfdrive/car/tests/test_nexo_guard.py",
   "selfdrive/car/card.py",
   "selfdrive/controls/controlsd.py",
   "selfdrive/controls/lib/longitudinal_planner.py",
@@ -89,24 +91,21 @@ def parse_python_files() -> None:
 
 def validate_interface() -> None:
   source = read("opendbc_repo/opendbc/car/hyundai/interface.py")
-
   required = (
-    "NEXO_STOCK_SCC_ADDRS",
-    "def _nexo_stock_scc_active",
     'raise RuntimeError("NEXO stock SCC communication could not be disabled")',
-    'raise RuntimeError("NEXO stock SCC remained active")',
     'raise RuntimeError("NEXO radar track activation failed")',
-    "STEP 1B verify stock SCC traffic is silent",
-    "DONE verified disable-then-radar sequence",
+    "START NEXOdriveAI long init",
+    "DONE NEXOdriveAI disable-then-radar sequence; runtime SCC guard armed by card",
   )
   for token in required:
     require(token in source, f"interface contract missing: {token}")
 
   disable_pos = source.find("disabled = disable_ecu")
-  verify_pos = source.find("stock_scc_active = _nexo_stock_scc_active", disable_pos)
-  radar_pos = source.find("tracks_enabled = enable_radar_tracks", verify_pos)
-  require(disable_pos >= 0 and verify_pos > disable_pos and radar_pos > verify_pos,
-          "NEXO init order must be disable -> verify SCC silence -> enable radar tracks")
+  radar_pos = source.find("tracks_enabled = enable_radar_tracks", disable_pos)
+  require(disable_pos >= 0 and radar_pos > disable_pos,
+          "NEXO init order must be extended-diagnostic disable -> radar-track programming")
+  require("_nexo_stock_scc_active" not in source,
+          "startup-only SCC silence check must not replace the runtime raw-CAN guard")
 
 
 def validate_hyundaican() -> None:
@@ -185,25 +184,39 @@ def validate_recovery() -> None:
   required = (
     '"NEXO radar track activation failed"',
     '"NEXO stock SCC communication could not be disabled"',
-    '"NEXO stock SCC remained active"',
+    '"NEXO stock SCC returned during longitudinal control"',
     'params.put_bool("AlphaLongitudinalEnabled", False, block=True)',
     'params.put_bool("ExperimentalMode", False, block=True)',
     'params.put_bool("DoReboot", True, block=True)',
-    "recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)",
+    "NexoStockSccRuntimeGuard",
+    "self.nexo_stock_scc_guard.arm()",
+    "self.nexo_stock_scc_guard.observe(can_list)",
   )
   for token in required:
     require(token in source, f"stock-cruise recovery missing: {token}")
+
+
+def validate_runtime_guard() -> None:
+  source = read("selfdrive/car/nexo_guard.py")
+  required = (
+    "NEXO_STOCK_SCC_ADDRS",
+    "NEXO_STOCK_SCC_SOURCE = 0",
+    "class NexoStockSccRuntimeGuard",
+    'getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE',
+    "len(self._timestamps) >= self.min_frames",
+  )
+  for token in required:
+    require(token in source, f"runtime SCC guard missing: {token}")
 
 
 def validate_safety() -> None:
   source = read("opendbc_repo/opendbc/safety/modes/hyundai.h")
   require("HYUNDAI_LONG_COMMON_TX_MSGS" in source, "longitudinal TX allowlist missing")
   require("longitudinal_accel_checks" in source, "longitudinal acceleration safety check missing")
-  require("hyundai_nexo_dynamic_scc_fwd" in source, "NEXO dynamic SCC forwarding state missing")
-  require("HYUNDAI_NEXO_FWD_TIMEOUT_US" in source, "NEXO forwarding failover timeout missing")
-  require(".fwd = hyundai_fwd_hook" in source, "Hyundai forwarding hook registration missing")
-  require(".disable_static_blocking = true" in source, "dynamic SCC static-block opt-out missing")
-  require("hyundai_nexo_scc_tx_seen" in source, "NEXO SCC TX liveness tracking missing")
+  require("hyundai_nexo_dynamic_scc_fwd" not in source,
+          "incorrect bus-direction dynamic SCC forwarding must stay removed")
+  require(".disable_static_blocking = true" not in source,
+          "SCC static relay blocking must remain enabled")
 
   for address in ("0x38D", "0x483", "0x7D0"):
     pattern = rf"\{{\s*{address}\s*,\s*0\s*,\s*8\s*,\s*\.check_relay\s*=\s*false\s*\}}"
@@ -216,6 +229,7 @@ def main() -> None:
   validate_hyundaican()
   validate_controller()
   validate_recovery()
+  validate_runtime_guard()
   validate_safety()
   print("NEXO integration preflight PASS")
 

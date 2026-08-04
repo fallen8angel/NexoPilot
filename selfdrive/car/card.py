@@ -19,6 +19,7 @@ from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.car.nexo_guard import NexoStockSccRuntimeGuard
 
 REPLAY = "REPLAY" in os.environ
 
@@ -27,6 +28,7 @@ NEXO_LONGITUDINAL_INIT_FAILURES = (
   "NEXO radar track activation failed",
   "NEXO stock SCC communication could not be disabled",
   "NEXO stock SCC remained active",
+  "NEXO stock SCC returned during longitudinal control",
 )
 
 # forward
@@ -141,6 +143,10 @@ class Car:
       safety_config.safetyModel = structs.CarParams.SafetyModel.noOutput
       self.CP.safetyConfigs = [safety_config]
 
+    self.nexo_stock_scc_guard = NexoStockSccRuntimeGuard(
+      not REPLAY and self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN" and self.CP.openpilotLongitudinalControl
+    )
+
     if self.CP.secOcRequired:
       # Copy user key if available
       try:
@@ -186,6 +192,11 @@ class Car:
 
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     can_list = can_capnp_to_list(can_strs)
+
+    if self.nexo_stock_scc_guard.observe(can_list):
+      error = RuntimeError("NEXO stock SCC returned during longitudinal control")
+      recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
+      raise error
 
     # Update carState from CAN
     CS = self.CI.update(can_list)
@@ -256,6 +267,8 @@ class Car:
       except RuntimeError as error:
         recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
         raise
+      # Arm the raw-CAN guard only after the diagnostic takeover completed.
+      self.nexo_stock_scc_guard.arm()
       # signal pandad to switch to car safety mode
       self.params.put_bool("ControlsReady", True)
 
