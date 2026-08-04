@@ -53,3 +53,5 @@ jobs:
           fi
           git commit -m "Keep NEXO card alive and capture crash traceback"
           git push origin HEAD:agent/nexo-card-crash-diagnostics-v3
+
+# Triggered after the workflow existed on the branch.
