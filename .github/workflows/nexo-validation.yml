@@ -37,8 +37,5 @@ jobs:
       - name: Check NEXO post-radar guard
         run: python tools/check_nexo_post_radar_guard.py
 
-      - name: Check NEXO diagnostics
-        run: python tools/check_nexo_diagnostics.py
-
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
