@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/nexo-ai-scc-ownership-v1
+  pull_request:
+    branches:
+      - NEXO
 
 permissions:
   contents: write
@@ -14,7 +17,7 @@ concurrency:
 
 jobs:
   apply-and-test:
-    if: ${{ !contains(github.event.head_commit.message, '[applied-ai-scc-v1]') }}
+    if: ${{ !contains(github.event.head_commit.message || '', '[applied-ai-scc-v1]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
 
@@ -54,5 +57,3 @@ jobs:
           git add .
           git commit -m "Implement NEXO AI SCC ownership and compatibility [applied-ai-scc-v1]"
           git push origin HEAD:agent/nexo-ai-scc-ownership-v1
-
-# Trigger the apply workflow after the workflow file already exists on the branch.
