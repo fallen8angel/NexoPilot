@@ -185,15 +185,21 @@ def validate_recovery() -> None:
     '"NEXO radar track activation failed"',
     '"NEXO stock SCC communication could not be disabled"',
     '"NEXO stock SCC returned during longitudinal control"',
-    'params.put_bool("AlphaLongitudinalEnabled", False, block=True)',
-    'params.put_bool("ExperimentalMode", False, block=True)',
-    'params.put_bool("DoReboot", True, block=True)',
+    'params.put("NexoLongitudinalFailure", reason, block=True)',
+    "self.nexo_long_init_failed",
+    "self._handle_nexo_long_failure(error)",
+    "self.CI.deinit(self.CP, *self.can_callbacks)",
     "NexoStockSccRuntimeGuard",
     "self.nexo_stock_scc_guard.arm()",
+    "self.nexo_stock_scc_guard.disarm()",
     "self.nexo_stock_scc_guard.observe(can_list)",
   )
   for token in required:
-    require(token in source, f"stock-cruise recovery missing: {token}")
+    require(token in source, f"NEXO failure latch missing: {token}")
+
+  recovery = source[source.index("def recover_nexo_stock_cruise"):source.index("def can_comm_callbacks")]
+  for forbidden in ("AlphaLongitudinalEnabled", "ExperimentalMode", "DoReboot", "CarParamsCache"):
+    require(forbidden not in recovery, f"NEXO failure policy must not change settings or reboot: {forbidden}")
 
 
 def validate_runtime_guard() -> None:
@@ -204,6 +210,7 @@ def validate_runtime_guard() -> None:
     "class NexoStockSccRuntimeGuard",
     'getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE',
     "len(self._detections) < self.min_frames",
+    "def disarm(self)",
   )
   for token in required:
     require(token in source, f"runtime SCC guard missing: {token}")

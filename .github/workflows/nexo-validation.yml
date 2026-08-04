@@ -40,5 +40,8 @@ jobs:
       - name: Check NEXO diagnostics
         run: python tools/check_nexo_diagnostics.py
 
+      - name: Check NEXO UDS and failure policy
+        run: python tools/check_nexo_uds_failure_policy.py
+
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py

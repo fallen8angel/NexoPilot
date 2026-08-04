@@ -200,7 +200,7 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     lines.append("해석할 SCC/FCA 메시지가 없습니다.")
 
   lines.extend(["", "[롱컨 초기화·UDS 추적]", core.nexo_long_init_output()])
-  lines.extend(["", "[마지막 자동 복구 기록]", last_fault_output()])
+  lines.extend(["", "[마지막 롱컨 실패 기록]", last_fault_output()])
   lines.extend(["", "[핵심 오류 로그]", core.important_log_output()])
   return "\n".join(lines)
 
@@ -263,8 +263,8 @@ def enhance_diagnostic_page(page: str) -> str:
   ).replace("<h2>롱컨 초기화 추적</h2>", "<h2>롱컨 초기화·UDS 추적</h2>")
   marker = '<div class="card"><h2>핵심 오류 요약</h2>'
   fault_card = (
-    '<div class="card"><h2>마지막 자동 복구 기록</h2>'
-    '<p class="desc">순정 SCC 재등장 또는 초기화 실패 직전 상태와 최근 5초 CAN 기록입니다. 재부팅 후에도 유지됩니다.</p>'
+    '<div class="card"><h2>마지막 롱컨 실패 기록</h2>'
+    '<p class="desc">순정 SCC 재등장 또는 초기화 실패 직전 상태와 최근 5초 CAN 기록입니다. 설정 자동해제나 자동 재부팅 없이 저장됩니다.</p>'
     f'<pre>{html.escape(last_fault_output())}</pre></div>'
   )
   return page.replace(marker, fault_card + marker, 1)
