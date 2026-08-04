@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - agent/nexo-card-crash-diagnostics-v3
+  pull_request:
+    branches:
+      - NEXO
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-nexo-card-crash-diagnostics-v3
+  group: apply-nexo-card-crash-diagnostics-v3-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,7 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: agent/nexo-card-crash-diagnostics-v3
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - name: Setup Python
@@ -53,5 +56,3 @@ jobs:
           fi
           git commit -m "Keep NEXO card alive and capture crash traceback"
           git push origin HEAD:agent/nexo-card-crash-diagnostics-v3
-
-# Triggered after the workflow existed on the branch.
