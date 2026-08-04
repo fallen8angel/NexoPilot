@@ -40,7 +40,7 @@ jobs:
         run: python tools/check_nexo_ai_scc_ownership.py
 
       - name: Install safety-test dependencies
-        run: python -m pip install --disable-pip-version-check numpy cffi parameterized
+        run: python -m pip install --disable-pip-version-check numpy cffi parameterized pycapnp
 
       - name: Run NEXO Panda ownership unit tests
         working-directory: opendbc_repo
