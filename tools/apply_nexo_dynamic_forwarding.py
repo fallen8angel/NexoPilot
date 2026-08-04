@@ -140,6 +140,24 @@ static safety_config hyundai_legacy_init(uint16_t param) {
 
 hyundai = replace_once(
   hyundai,
+  """const safety_hooks hyundai_hooks = {
+  .init = hyundai_init,
+  .rx = hyundai_rx_hook,
+  .tx = hyundai_tx_hook,
+  .get_counter = hyundai_get_counter,
+""",
+  """const safety_hooks hyundai_hooks = {
+  .init = hyundai_init,
+  .rx = hyundai_rx_hook,
+  .tx = hyundai_tx_hook,
+  .fwd = hyundai_fwd_hook,
+  .get_counter = hyundai_get_counter,
+""",
+  "register primary Hyundai forwarding hook",
+)
+
+hyundai = replace_once(
+  hyundai,
   """  hyundai_longitudinal = false;
   hyundai_camera_scc = false;
   return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TX_MSGS);
@@ -152,20 +170,6 @@ hyundai = replace_once(
   return BUILD_SAFETY_CFG(hyundai_legacy_rx_checks, HYUNDAI_TX_MSGS);
 """,
   "legacy forwarding reset",
-)
-
-hyundai = replace_once(
-  hyundai,
-  """  .rx = hyundai_rx_hook,
-  .tx = hyundai_tx_hook,
-  .get_counter = hyundai_get_counter,
-""",
-  """  .rx = hyundai_rx_hook,
-  .tx = hyundai_tx_hook,
-  .fwd = hyundai_fwd_hook,
-  .get_counter = hyundai_get_counter,
-""",
-  "register Hyundai forwarding hook",
 )
 
 HYUNDAI.write_text(hyundai, encoding="utf-8")
