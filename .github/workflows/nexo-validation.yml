@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate-nexo-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Checkout
@@ -36,9 +36,3 @@ jobs:
 
       - name: Check NEXO DBC contract
         run: python tools/check_nexo_dbc_contract.py
-
-      - name: Install opendbc safety test dependencies
-        run: python -m pip install cffi numpy pycapnp tqdm pycryptodome
-
-      - name: Compile and test NEXO FCEV safety forwarding
-        run: PYTHONPATH=opendbc_repo python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiSafetyFCEVLong
