@@ -46,14 +46,21 @@ jobs:
         working-directory: opendbc_repo
         run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiNexoDynamicSCCOwnership
 
-      - name: Commit generated changes
+      - name: Commit generated vehicle and checker changes
         run: |
-          if git diff --quiet; then
-            echo "No generated changes"
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
+          git add \
+            opendbc_repo/opendbc/car/hyundai/values.py \
+            opendbc_repo/opendbc/car/hyundai/interface.py \
+            opendbc_repo/opendbc/car/hyundai/hyundaican.py \
+            opendbc_repo/opendbc/safety/modes/hyundai_common.h \
+            opendbc_repo/opendbc/safety/modes/hyundai.h \
+            opendbc_repo/opendbc/safety/tests/test_hyundai.py \
+            tools/check_nexo_ai_scc_ownership.py
+          if git diff --cached --quiet; then
+            echo "No generated vehicle changes"
+            exit 0
+          fi
           git commit -m "Implement NEXO AI SCC ownership and compatibility [applied-ai-scc-v1]"
           git push origin HEAD:agent/nexo-ai-scc-ownership-v1
