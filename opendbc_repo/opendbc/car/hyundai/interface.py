@@ -16,44 +16,6 @@ from opendbc.car.hyundai.radar_interface import RadarInterface
 ButtonType = structs.CarState.ButtonEvent.Type
 Ecu = structs.CarParams.Ecu
 NEXO_LONG_INIT_LOG = "/data/nexo_long_init.log"
-NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x420, 0x421))
-NEXO_STOCK_SCC_VERIFY_TIMEOUT = 0.35
-NEXO_STOCK_SCC_MIN_FRAMES = 3
-
-
-def _trace_nexo_long_init(message: str, reset: bool = False) -> None:
-  try:
-    with open(NEXO_LONG_INIT_LOG, "w" if reset else "a", encoding="utf-8") as trace:
-      trace.write(f"{time.monotonic():.3f} {message}\n")
-  except OSError:
-    pass
-
-
-def _nexo_stock_scc_active(can_recv, bus: int, timeout: float = NEXO_STOCK_SCC_VERIFY_TIMEOUT) -> bool:
-  """Return True when stock SCC frames continue after communication control.
-
-  This runs before CarController starts sending SCC frames, so any matching
-  physical-bus traffic is from the stock SCC path. Discard buffered frames from
-  before the UDS request, then require multiple fresh frames to avoid treating a
-  single queued packet as an active ECU.
-  """
-  try:
-    can_recv(wait_for_one=False)
-  except Exception:
-    pass
-
-  deadline = time.monotonic() + timeout
-  frame_count = 0
-  while time.monotonic() < deadline:
-    for batch in can_recv(wait_for_one=True):
-      for msg in batch:
-        if msg.src == bus and msg.address in NEXO_STOCK_SCC_ADDRS:
-          frame_count += 1
-          if frame_count >= NEXO_STOCK_SCC_MIN_FRAMES:
-            return True
-  return False
-
-
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
 
 
@@ -205,26 +167,15 @@ class CarInterface(CarInterfaceBase):
       is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
       if is_nexo and disabling_normal_comms:
-        _trace_nexo_long_init(f"START Carrot-style long init bus={bus} addr=0x{addr:x}", reset=True)
-        _trace_nexo_long_init("STEP 1 request stock SCC communication suppression")
+        _trace_nexo_long_init(f"START NEXOdriveAI long init bus={bus} addr=0x{addr:x}", reset=True)
+        _trace_nexo_long_init("STEP 1 enter extended diagnostics and suppress stock SCC")
         disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
         _trace_nexo_long_init(f"STEP 1 request completed={disabled}")
         if not disabled:
           _trace_nexo_long_init("FAIL stock SCC communication-control was not acknowledged")
           raise RuntimeError("NEXO stock SCC communication could not be disabled")
 
-        _trace_nexo_long_init("STEP 1B verify stock SCC traffic is silent")
-        stock_scc_active = _nexo_stock_scc_active(can_recv, bus)
-        _trace_nexo_long_init(f"STEP 1B stock SCC active={stock_scc_active}")
-        if stock_scc_active:
-          enable_communication = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
-                                        0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
-                                        uds.MESSAGE_TYPE.NORMAL])
-          disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=enable_communication)
-          _trace_nexo_long_init("FAIL stock SCC remained active; requested stock communication restore")
-          raise RuntimeError("NEXO stock SCC remained active")
-
-        _trace_nexo_long_init("STEP 2 request radar-track activation")
+        _trace_nexo_long_init("STEP 2 run NEXOdriveAI radar-track sequence")
         tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=40)
         _trace_nexo_long_init(f"STEP 2 radar-track request completed={tracks_enabled}")
         if not tracks_enabled:
@@ -235,7 +186,7 @@ class CarInterface(CarInterfaceBase):
           _trace_nexo_long_init("FAIL radar tracks; requested stock communication restore")
           raise RuntimeError("NEXO radar track activation failed")
 
-        _trace_nexo_long_init("DONE verified disable-then-radar sequence")
+        _trace_nexo_long_init("DONE NEXOdriveAI disable-then-radar sequence; runtime SCC guard armed by card")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
