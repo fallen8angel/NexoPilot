@@ -46,6 +46,11 @@ class NexoStockSccRuntimeGuard:
     self._recent_can.clear()
     self._last_fault = {}
 
+  def disarm(self) -> None:
+    """Stop runtime detection while retaining the captured fault history."""
+    self.armed = False
+    self._detections.clear()
+
   def _prune(self, timestamp: float) -> None:
     detection_cutoff = timestamp - self.window_s
     while self._detections and self._detections[0][0] < detection_cutoff:

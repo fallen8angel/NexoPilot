@@ -20,6 +20,32 @@ def _trace_radar_uds(message: str) -> None:
     pass
 
 
+def _format_isotp_address(address) -> str:
+  """Render AddrType values without allowing diagnostics to affect UDS control flow."""
+  try:
+    if isinstance(address, tuple):
+      tx_addr, sub_addr = address
+      rendered = f"0x{int(tx_addr):X}"
+      return rendered if sub_addr is None else f"{rendered}:sub=0x{int(sub_addr):X}"
+    return f"0x{int(address):X}"
+  except Exception:
+    return repr(address)
+
+
+def _render_isotp_result(result) -> str:
+  try:
+    items = []
+    for address, payload in result.items():
+      try:
+        payload_text = bytes(payload).hex(" ")
+      except Exception:
+        payload_text = repr(payload)
+      items.append(f"{_format_isotp_address(address)}:{payload_text}")
+    return ", ".join(items) or "none"
+  except Exception as error:
+    return f"unavailable({type(error).__name__}: {error})"
+
+
 def _query(can_recv, can_send, bus, request, response, timeout=RADAR_QUERY_TIMEOUT):
   started = time.monotonic()
   _trace_radar_uds(
@@ -29,10 +55,10 @@ def _query(can_recv, can_send, bus, request, response, timeout=RADAR_QUERY_TIMEO
   query = IsoTpParallelQuery(can_send, can_recv, bus, [RADAR_ADDR], [request], [response])
   try:
     result = query.get_data(timeout, total_timeout=max(timeout * 3, RADAR_QUERY_TOTAL_TIMEOUT))
-    rendered = ", ".join(f"0x{address:X}:{bytes(payload).hex(' ')}" for address, payload in result.items())
+    rendered = _render_isotp_result(result)
     _trace_radar_uds(
       f"UDS RX ecu=0x{RADAR_ADDR:X} bus={bus} elapsed_ms={(time.monotonic() - started) * 1000:.1f} "
-      f"payloads={rendered or 'none'}"
+      f"payloads={rendered}"
     )
     return result
   except Exception as error:

@@ -48,7 +48,12 @@ def obd_callback(params: Params) -> ObdCallback:
 
 
 def recover_nexo_stock_cruise(params: Params, car_fingerprint: str, error: Exception) -> bool:
-  """Fall back to stock SCC after a verified NEXO longitudinal initialization failure."""
+  """Record a NEXO longitudinal failure without changing settings or rebooting.
+
+  The caller must stop longitudinal CAN output for the current process and make
+  a best-effort request to restore factory SCC communication. User selections
+  remain untouched so a manual vehicle restart can retry the same configuration.
+  """
   if car_fingerprint != "HYUNDAI_NEXO_1ST_GEN":
     return False
 
@@ -56,14 +61,8 @@ def recover_nexo_stock_cruise(params: Params, car_fingerprint: str, error: Excep
   if not any(message in reason for message in NEXO_LONGITUDINAL_INIT_FAILURES):
     return False
 
-  params.put_bool("AlphaLongitudinalEnabled", False, block=True)
-  params.put_bool("ExperimentalMode", False, block=True)
-  # Do not reuse CarParams that were built with longitudinal control enabled.
-  # A full manager reboot makes pandad and card both restart in stock SCC mode.
-  for key in ("CarParams", "CarParamsCache", "CarParamsPersistent"):
-    params.remove(key)
-  params.put_bool("DoReboot", True, block=True)
-  cloudlog.error(f"NEXO longitudinal setup failed; rebooting into stock cruise: {reason}")
+  params.put("NexoLongitudinalFailure", reason, block=True)
+  cloudlog.error(f"NEXO longitudinal setup failed; controls latched off for this session, settings preserved: {reason}")
   return True
 
 
@@ -147,6 +146,7 @@ class Car:
     self.nexo_stock_scc_guard = NexoStockSccRuntimeGuard(
       not REPLAY and self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN" and self.CP.openpilotLongitudinalControl
     )
+    self.nexo_long_init_failed = False
 
     if self.CP.secOcRequired:
       # Copy user key if available
@@ -188,6 +188,24 @@ class Car:
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
+  def _handle_nexo_long_failure(self, error: Exception) -> bool:
+    self.sm.update(0)
+    record_nexo_fault_snapshot(self.params, self.nexo_stock_scc_guard, self.sm, error)
+    if not recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error):
+      return False
+
+    # Restore the factory ECU stream when possible, but never change the user's
+    # longitudinal/experimental settings and never request an automatic reboot.
+    try:
+      self.CI.deinit(self.CP, *self.can_callbacks)
+    except Exception as restore_error:
+      cloudlog.exception(f"NEXO stock SCC restore request failed: {restore_error}")
+
+    self.nexo_stock_scc_guard.disarm()
+    self.nexo_long_init_failed = True
+    self.last_actuators_output = structs.CarControl.Actuators()
+    return True
+
   def state_update(self) -> tuple[car.CarState, structs.RadarDataT | None]:
     """carState update loop, driven by can"""
 
@@ -197,9 +215,8 @@ class Car:
 
     if self.nexo_stock_scc_guard.observe(can_list):
       error = RuntimeError("NEXO stock SCC returned during longitudinal control")
-      record_nexo_fault_snapshot(self.params, self.nexo_stock_scc_guard, self.sm, error)
-      recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
-      raise error
+      if not self._handle_nexo_long_failure(error):
+        raise error
 
     # Update carState from CAN
     CS = self.CI.update(can_list)
@@ -260,16 +277,19 @@ class Car:
   def controls_update(self, CS: car.CarState, CC: car.CarControl):
     """control update loop, driven by carControl"""
 
+    if self.nexo_long_init_failed:
+      return
+
     if not self.initialized_prev:
       # Initialize CarInterface, once controls are ready
       # TODO: this can make us miss at least a few cycles when doing an ECU knockout
       try:
         self.CI.init(self.CP, *self.can_callbacks)
       except RuntimeError as error:
-        self.sm.update(0)
-        record_nexo_fault_snapshot(self.params, self.nexo_stock_scc_guard, self.sm, error)
-        recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error)
+        if self._handle_nexo_long_failure(error):
+          return
         raise
+      self.params.remove("NexoLongitudinalFailure")
       # Arm the raw-CAN guard only after the diagnostic takeover completed.
       self.nexo_stock_scc_guard.arm()
       # signal pandad to switch to car safety mode
