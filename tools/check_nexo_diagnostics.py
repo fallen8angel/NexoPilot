@@ -63,12 +63,16 @@ def main() -> None:
                 "openpilotLongitudinalControl", "pcmCruise", "radarUnavailable", "sccBus",
                 "safetyConfigs", "SCC12 핵심", "순정 SCC 복구", "기계 판독 JSON",
                 "상세 원문 - 필요할 때만 아래를 확인하세요",
-                "controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상"):
+                "controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상",
+                "def _marker_snapshot", "longitudinal_takeover_ready", "restore_pending",
+                "def correct_legacy_wording", "brand", "card_healthy", "sm.seen"):
     require(token in unified, f"unified 8-second diagnostics missing: {token}")
+  require("cp.carName" not in unified, "CarParams has no carName member in this schema")
   for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "git_run(\"merge\""):
     require(forbidden not in unified, f"unified diagnostics must remain read-only: {forbidden}")
 
   require("diagnostics_v2.longitudinal_blackbox_output" in entry, "web v2 blackbox not wired")
+  require("unified_diagnostics.correct_legacy_wording" in entry, "legacy false-positive correction not wired")
   require("unified_diagnostics.build_unified_report" in entry, "unified 8-second report not wired")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
@@ -79,7 +83,7 @@ def main() -> None:
   require("DEINIT stock SCC communication restore" in interface, "NEXO deinit restore trace missing")
   require("CarInterface.init(CP, can_recv, can_send, communication_control)" in interface,
           "non-NEXO deinit fallback missing")
-  print("NEXO diagnostics v3 unified report PASS")
+  print("NEXO diagnostics v4 corrected unified report PASS")
 
 
 if __name__ == "__main__":
