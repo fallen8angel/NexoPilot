@@ -38,13 +38,16 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
   {0x389, 0,       8, .check_relay = true},   /* SCC14 Bus 0       */ \
   {0x4A2, 0,       2, .check_relay = false},  /* FRT_RADAR11 Bus 0 */ \
 
+// NEXO suppresses the radar SCC over UDS and then owns SCC through the dynamic
+// forwarding hook below. Keep generic relay detection enabled as an independent
+// fail-closed layer alongside the post-radar verifier and card runtime guard.
 #define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS(scc_bus) \
   HYUNDAI_COMMON_TX_MSGS(scc_bus) \
   {0x420, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC11 Bus 0 */ \
   {0x421, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC12 Bus 0 */ \
   {0x50A, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC13 Bus 0 */ \
   {0x389, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC14 Bus 0 */ \
-  {0x4A2, 0,       2, .check_relay = false},                                 /* FRT_RADAR11 Bus 0 */ \
+  {0x4A2, 0,       2, .check_relay = false},                                  /* FRT_RADAR11 Bus 0 */ \
 
 #define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
   {.msg = {{0x260, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true},                                                                                           \
@@ -218,6 +221,7 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
   if (msg->addr == 0x421U) {
     int desired_accel_raw = (((msg->data[4] & 0x7U) << 8) | msg->data[3]) - 1023U;
     int desired_accel_val = ((msg->data[5] << 3) | (msg->data[4] >> 5)) - 1023U;
+    int acc_mode = (GET_BYTES(msg, 0, 4) >> 13) & 0x3U;
 
     int aeb_decel_cmd = msg->data[2];
     bool aeb_req = GET_BIT(msg, 54U);
@@ -228,6 +232,14 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
     violation |= longitudinal_accel_checks(desired_accel_val, HYUNDAI_LONG_LIMITS);
     violation |= (aeb_decel_cmd != 0);
     violation |= aeb_req;
+
+    // Before controls are allowed, NEXO may send only a neutral ownership
+    // heartbeat. ACCMode must remain inactive; non-zero acceleration and AEB are
+    // already rejected above. Active longitudinal commands still require the
+    // normal controls_allowed and pedal safety gates.
+    if (hyundai_nexo_dynamic_scc && !get_longitudinal_allowed() && (acc_mode != 0)) {
+      violation = true;
+    }
 
     if (violation) {
       tx = false;

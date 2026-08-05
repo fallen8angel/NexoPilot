@@ -43,6 +43,9 @@ jobs:
       - name: Check NEXO diagnostics
         run: python tools/check_nexo_diagnostics.py
 
+      - name: Check NEXO verified SCC takeover and AI parity diagnostics
+        run: python tools/check_nexo_ai_parity.py
+
       - name: Check NEXO cruise-only driver monitoring and port 7000
         run: python tools/check_nexo_driver_monitoring.py
 
@@ -64,6 +67,14 @@ jobs:
       - name: Test NEXO Panda SCC ownership
         working-directory: opendbc_repo
         run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiNexoDynamicSCCOwnership
+
+      - name: Test NEXO neutral SCC ownership
+        working-directory: opendbc_repo
+        run: python -m unittest opendbc.safety.tests.test_hyundai_nexo_neutral_ownership
+
+      - name: Test NEXO post-radar SCC silence verification
+        working-directory: opendbc_repo
+        run: python -m unittest opendbc.car.hyundai.tests.test_nexo_takeover
 
       - name: Test NEXO CAN fingerprint fallback
         working-directory: opendbc_repo

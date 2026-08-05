@@ -8,6 +8,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.hyundai.radar_tracks import enable_radar_tracks
+from opendbc.car.hyundai.nexo_takeover import ensure_nexo_stock_scc_silent
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.hyundai.carcontroller import CarController
@@ -271,6 +272,15 @@ class CarInterface(CarInterfaceBase):
           _trace_nexo_long_init(f"STEP 2 radar-track request completed={tracks_enabled}")
           if not tracks_enabled:
             raise RuntimeError("NEXO radar track activation failed")
+
+          _trace_nexo_long_init("STEP 3 re-suppress stock SCC after radar DID write and verify physical source0 silence")
+          stock_scc_silent = ensure_nexo_stock_scc_silent(
+            can_recv, can_send, bus=bus, addr=addr, communication_control=communication_control,
+            trace=_trace_nexo_long_init, attempts=3,
+          )
+          _trace_nexo_long_init(f"STEP 3 verified source0 SCC silence={stock_scc_silent}")
+          if not stock_scc_silent:
+            raise RuntimeError("NEXO stock SCC remained active")
         except BaseException as error:
           restored = restore_nexo_stock_scc_communication(
             can_recv, can_send, bus=bus, addr=addr, reason=f"long init exception: {type(error).__name__}",
