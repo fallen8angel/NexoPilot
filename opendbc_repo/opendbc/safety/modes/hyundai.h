@@ -39,15 +39,14 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
   {0x4A2, 0,       2, .check_relay = false},  /* FRT_RADAR11 Bus 0 */ \
 
 // NEXO suppresses the radar SCC over UDS and then owns SCC through the dynamic
-// forwarding hook below. Do not let the generic relay detector permanently
-// latch all TX while the short takeover transition is being observed; the
-// source-0 runtime guard in card remains the fail-closed authority.
+// forwarding hook below. Keep generic relay detection enabled as an independent
+// fail-closed layer alongside the post-radar verifier and card runtime guard.
 #define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS(scc_bus) \
   HYUNDAI_COMMON_TX_MSGS(scc_bus) \
-  {0x420, 0,       8, .check_relay = false, .disable_static_blocking = true},  /* SCC11 Bus 0 */ \
-  {0x421, 0,       8, .check_relay = false, .disable_static_blocking = true},  /* SCC12 Bus 0 */ \
-  {0x50A, 0,       8, .check_relay = false, .disable_static_blocking = true},  /* SCC13 Bus 0 */ \
-  {0x389, 0,       8, .check_relay = false, .disable_static_blocking = true},  /* SCC14 Bus 0 */ \
+  {0x420, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC11 Bus 0 */ \
+  {0x421, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC12 Bus 0 */ \
+  {0x50A, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC13 Bus 0 */ \
+  {0x389, 0,       8, .check_relay = true, .disable_static_blocking = true},  /* SCC14 Bus 0 */ \
   {0x4A2, 0,       2, .check_relay = false},                                  /* FRT_RADAR11 Bus 0 */ \
 
 #define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
