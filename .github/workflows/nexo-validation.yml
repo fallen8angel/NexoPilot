@@ -43,6 +43,9 @@ jobs:
       - name: Check NEXO diagnostics
         run: python tools/check_nexo_diagnostics.py
 
+      - name: Check NEXO cruise-only driver monitoring and port 7000
+        run: python tools/check_nexo_driver_monitoring.py
+
       - name: Check NEXO UDS and failure policy
         run: python tools/check_nexo_uds_failure_policy.py
 
