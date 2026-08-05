@@ -46,7 +46,8 @@ def raw_can_diagnostic_output() -> str:
 
 def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   raw_report = diagnostics_v2.longitudinal_blackbox_output(core, duration)
-  annotated_report = diagnostics.annotate_blackbox(raw_report)
+  corrected_report = unified_diagnostics.correct_legacy_wording(raw_report)
+  annotated_report = diagnostics.annotate_blackbox(corrected_report)
   unified_report = unified_diagnostics.build_unified_report(core, annotated_report, duration)
   return dm_diagnostics.prepend_driver_monitoring_report(core, unified_report)
 
@@ -63,7 +64,7 @@ core.important_log_output = important_log_output
 core.raw_can_diagnostic_output = raw_can_diagnostic_output
 core.longitudinal_blackbox_output = longitudinal_blackbox_output
 core.diagnostic_page = diagnostic_page
-core.Handler.server_version = "NexoPilotWeb/7.2"
+core.Handler.server_version = "NexoPilotWeb/7.3"
 
 
 class StableThreadingHTTPServer(ThreadingHTTPServer):
