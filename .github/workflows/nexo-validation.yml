@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate-nexo-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - name: Checkout
@@ -65,3 +65,7 @@ jobs:
       - name: Test NEXO CAN fingerprint fallback
         working-directory: opendbc_repo
         run: python -m unittest opendbc.car.hyundai.tests.test_nexo_fingerprint
+
+      - name: Test NEXO stock SCC crash recovery
+        working-directory: opendbc_repo
+        run: python -m unittest opendbc.car.hyundai.tests.test_nexo_init
