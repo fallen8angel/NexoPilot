@@ -11,6 +11,7 @@ DIAGNOSTIC_FILES = (
   "selfdrive/car/card.py",
   "system/nexo_web/web.py",
   "system/nexo_web/nexo_diagnostics_v2.py",
+  "system/nexo_web/nexo_unified_diagnostics.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
   "opendbc_repo/opendbc/car/hyundai/interface.py",
 )
@@ -37,6 +38,7 @@ def main() -> None:
   runtime = sources["selfdrive/car/nexo_runtime_diagnostics.py"]
   entry = sources["system/nexo_web/web.py"]
   web = sources["system/nexo_web/nexo_diagnostics_v2.py"]
+  unified = sources["system/nexo_web/nexo_unified_diagnostics.py"]
   radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
   interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
 
@@ -55,7 +57,20 @@ def main() -> None:
                 "runtime_status_output", "card_crash_output", "과거 버전 기록",
                 "순정 FCA11/FCA12 수신은 정상"):
     require(token in web, f"web diagnostics missing: {token}")
+
+  for token in ("NexoPilot 8초 통합진단 - 한눈에 보기", "build_unified_report",
+                "_carparams_snapshot", "_process_snapshot", "_service_snapshot",
+                "openpilotLongitudinalControl", "pcmCruise", "radarUnavailable", "sccBus",
+                "safetyConfigs", "SCC12 핵심", "순정 SCC 복구", "기계 판독 JSON",
+                "상세 원문 - 필요할 때만 아래를 확인하세요",
+                "controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상"):
+    require(token in unified, f"unified 8-second diagnostics missing: {token}")
+  for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "git_run(\"merge\""):
+    require(forbidden not in unified, f"unified diagnostics must remain read-only: {forbidden}")
+
   require("diagnostics_v2.longitudinal_blackbox_output" in entry, "web v2 blackbox not wired")
+  require("unified_diagnostics.build_unified_report" in entry, "unified 8-second report not wired")
+  require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
     require(token in radar, f"radar UDS diagnostics missing: {token}")
@@ -64,7 +79,7 @@ def main() -> None:
   require("DEINIT stock SCC communication restore" in interface, "NEXO deinit restore trace missing")
   require("CarInterface.init(CP, can_recv, can_send, communication_control)" in interface,
           "non-NEXO deinit fallback missing")
-  print("NEXO diagnostics v2 PASS")
+  print("NEXO diagnostics v3 unified report PASS")
 
 
 if __name__ == "__main__":
