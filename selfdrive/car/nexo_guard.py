@@ -128,7 +128,7 @@ class NexoStockSccRuntimeGuard:
           payload = ""
         self._recent_can.append((timestamp, source, address, payload))
 
-      if (grace_complete and source == NEXO_STOCK_SCC_SOURCE and
+      if (grace_complete and getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE and
           address in NEXO_STOCK_SCC_ADDRS):
         self._detections.append((timestamp, address))
 
