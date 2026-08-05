@@ -73,16 +73,62 @@ def _heartbeat(core) -> tuple[str, float | None]:
     return "확인 불가", None
 
 
+def _marker_snapshot() -> dict[str, object]:
+  exists = NEXO_SCC_TAKEOVER_MARKER.exists()
+  raw = _read_tail(NEXO_SCC_TAKEOVER_MARKER, 512).strip() if exists else ""
+  stage = raw.split()[-1] if raw else "없음"
+
+  if not exists:
+    problem = False
+    description = "마커 없음"
+  elif stage == "longitudinal_takeover_ready":
+    problem = False
+    description = "롱컨 takeover 준비 완료 마커(현재 롱컨 세션에서는 정상)"
+  elif stage == "restore_pending":
+    problem = True
+    description = "순정 SCC 복구 재시도 필요"
+  elif stage == "stock_scc_disabled":
+    problem = True
+    description = "순정 SCC 중지 후 초기화가 완료되지 않은 상태"
+  else:
+    problem = True
+    description = f"알 수 없는 마커 상태: {stage}"
+
+  return {
+    "exists": exists,
+    "raw": raw,
+    "stage": stage,
+    "problem": problem,
+    "description": description,
+  }
+
+
+def correct_legacy_wording(report: str) -> str:
+  """Correct old text that treated blocked/inactive SCC traces as simultaneous control."""
+  inactive = "selfdrive=disabled/False/False" in report or "controlsAllowed=False" in report
+  if inactive:
+    report = report.replace(
+      "판정: 위험: 순정 SCC와 openpilot SCC가 동시에 관측됐습니다.",
+      "판정: 정보: 크루즈 비활성 상태에서 순정 SCC와 Panda 송신/차단 흔적이 함께 보였습니다. 실제 동시 제어로 판정하지 않습니다.",
+    )
+
+  marker = _marker_snapshot()
+  old_marker = "순정 SCC 복구 대기 마커: 있음 - 일반 크루즈 복구 필요"
+  if old_marker in report:
+    report = report.replace(old_marker, f"순정 SCC takeover 마커: {marker['description']}")
+  return report
+
+
 def _carparams_snapshot(core) -> dict[str, object]:
   result: dict[str, object] = {
     "available": False,
     "fingerprint": "없음",
-    "carName": "확인 불가",
+    "brand": "확인 불가",
     "isNexo": False,
     "openpilotLongitudinalControl": None,
     "pcmCruise": None,
     "radarUnavailable": None,
-    "sccBus": "확인 불가",
+    "sccBus": "필드 없음",
     "flags": "확인 불가",
     "safetyConfigs": [],
   }
@@ -105,14 +151,14 @@ def _carparams_snapshot(core) -> dict[str, object]:
           "param": int(cfg.safetyParam),
         })
       result.update({
-        "available": True,
+        "available": bool(fingerprint),
         "fingerprint": fingerprint,
-        "carName": str(cp.carName),
+        "brand": str(_safe_attr(cp, "brand")),
         "isNexo": "NEXO" in fingerprint.upper(),
         "openpilotLongitudinalControl": bool(cp.openpilotLongitudinalControl),
         "pcmCruise": bool(cp.pcmCruise),
         "radarUnavailable": bool(cp.radarUnavailable),
-        "sccBus": _safe_attr(cp, "sccBus"),
+        "sccBus": _safe_attr(cp, "sccBus", "필드 없음"),
         "flags": int(cp.flags),
         "safetyConfigs": configs,
       })
@@ -123,15 +169,23 @@ def _carparams_snapshot(core) -> dict[str, object]:
 
 def _service_snapshot() -> dict[str, dict[str, object]]:
   services = ["carState", "selfdriveState", "pandaStates", "radarState"]
-  result: dict[str, dict[str, object]] = {name: {"alive": False, "valid": False, "ageMs": None} for name in services}
+  result: dict[str, dict[str, object]] = {
+    name: {"seen": False, "alive": False, "valid": False, "ageMs": None} for name in services
+  }
   try:
     sm = messaging.SubMaster(services)
-    sm.update(700)
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+      sm.update(100)
+      if all(sm.seen[name] for name in services):
+        break
+
     now_ns = time.monotonic_ns()
     for name in services:
       mono = int(sm.logMonoTime[name])
       age_ms = round(max(0, now_ns - mono) / 1e6, 1) if mono else None
       result[name] = {
+        "seen": bool(sm.seen[name]),
         "alive": bool(sm.alive[name]),
         "valid": bool(sm.valid[name]),
         "ageMs": age_ms,
@@ -173,7 +227,9 @@ def _service_snapshot() -> dict[str, dict[str, object]]:
       "unavailableTemporary": bool(errors.radarUnavailableTemporary),
     })
   except Exception as error:
-    result["snapshotError"] = {"alive": False, "valid": False, "ageMs": None, "error": str(error)}
+    result["snapshotError"] = {
+      "seen": False, "alive": False, "valid": False, "ageMs": None, "error": str(error),
+    }
   return result
 
 
@@ -240,21 +296,23 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   services = _service_snapshot()
   heartbeat_text, heartbeat_age = _heartbeat(core)
   flow = _flow_snapshot(report)
+  marker = _marker_snapshot()
 
   stock_scc = _metric(report, r"순정 SCC:\s*(\d+)")
-  op_scc = _metric(report, r"openpilot SCC:\s*(\d+)")
+  op_scc = _metric(report, r"(?:openpilot SCC|Panda 송신 성공 SCC):\s*(\d+)")
   blocked_scc = _metric(report, r"Panda 차단 SCC:\s*(\d+)")
   stock_fca = _metric(report, r"순정 FCA:\s*(\d+)")
-  op_fca = _metric(report, r"openpilot FCA:\s*(\d+)")
+  op_fca = _metric(report, r"(?:openpilot FCA|Panda 송신 성공 FCA):\s*(\d+)")
   blocked_fca = _metric(report, r"Panda 차단 FCA:\s*(\d+)")
   radar_tracks = _metric(report, r"레이더 트랙 프레임:\s*(\d+)")
 
   active = bool(services.get("selfdriveState", {}).get("active")) or bool(re.search(r"selfdrive=[^\n]*/True(?:/|\s)", report))
   controls_allowed = services.get("pandaStates", {}).get("controlsAllowed") is True or "controlsAllowed=True" in report
-  carstate_alive = bool(services.get("carState", {}).get("alive")) and bool(services.get("carState", {}).get("valid"))
+  carstate_alive = bool(services.get("carState", {}).get("seen")) and bool(services.get("carState", {}).get("valid"))
   card_running = bool(processes.get("card", {}).get("running"))
   heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= 3.0
-  marker_pending = NEXO_SCC_TAKEOVER_MARKER.exists()
+  card_healthy = card_running and (heartbeat_fresh or carstate_alive)
+
   restore_log = _read_tail(NEXO_SCC_RESTORE_LOG)
   restore_ack = "acknowledged=True" in restore_log
   restore_last_line = next((line.strip() for line in reversed(restore_log.splitlines()) if line.strip()), "기록 없음")
@@ -273,7 +331,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   first_error = _first_real_error((runtime_section, init_section, current_crash and crash_section or "", error_section))
 
   uds_suppress_ok = "acknowledged=True" in init_section or "completed=True" in init_section
-  radar_init_ok = "radar-track request completed=True" in init_section or "RADAR ATTEMPT" in init_section and "completed" in init_section
+  radar_init_ok = "radar-track request completed=True" in init_section or ("RADAR ATTEMPT" in init_section and "completed" in init_section)
   scc12 = flow["SCC12"]
   long_enabled = cp.get("openpilotLongitudinalControl") is True
 
@@ -281,12 +339,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   warnings: list[str] = []
   if not cp.get("available") or not cp.get("isNexo"):
     problems.append("차량이 HYUNDAI_NEXO_1ST_GEN으로 확인되지 않음")
-  if not card_running or not heartbeat_fresh:
-    problems.append("card 프로세스 또는 heartbeat 비정상")
+  if not card_healthy:
+    problems.append("card 프로세스와 carState/heartbeat가 모두 비정상")
   if not carstate_alive:
-    problems.append("carState가 살아 있지 않거나 유효하지 않음")
-  if marker_pending:
-    problems.append("순정 SCC 복구 대기 마커가 남아 있음")
+    problems.append("carState가 수신되지 않거나 유효하지 않음")
+  if bool(marker.get("problem")):
+    problems.append(str(marker.get("description")))
   if current_crash:
     problems.append("현재 버전 card crash 기록 존재")
   if radar_error:
@@ -295,39 +353,36 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     problems.append("ACC fault 관측")
   if rx_invalid:
     problems.append("Panda RX 안전검사 invalid")
-  if active and blocked_scc:
+  if active and controls_allowed and blocked_scc:
     problems.append("실제 제어 활성 중 SCC Panda 차단 관측")
-  if active and op_scc and stock_scc:
-    problems.append("실제 제어 활성 구간에서 순정 SCC와 openpilot SCC가 함께 관측됨")
 
+  if card_running and carstate_alive and heartbeat_age is None:
+    warnings.append("heartbeat Params는 확인되지 않았지만 card 프로세스와 최신 carState로 card 실행은 확인됨")
+  if not active and blocked_scc:
+    warnings.append("P단·크루즈 비활성 상태의 Panda 차단은 정상일 수 있음")
+  if stock_scc and op_scc and not active:
+    warnings.append("같은 주소의 차량 수신과 Panda 송신 흔적이 함께 보였지만 비활성 상태라 실제 동시 제어로 판정하지 않음")
   if long_enabled and not active and scc12["requested"] == 0:
     warnings.append("P단·크루즈 비활성 진단이라 SCC12 요청 0회는 정상일 수 있음")
-  if not active and blocked_scc:
-    warnings.append("비활성 상태의 Panda 차단은 정상일 수 있음")
-  if stock_scc and op_scc and not active:
-    warnings.append("동일 8초 구간에 두 SCC가 보였지만 비활성·전환 구간이므로 동시 제어로 확정하지 않음")
   if long_enabled and radar_tracks == 0:
     warnings.append("레이더 트랙을 관측하지 못함")
 
   if problems:
     overall = _label("주행 금지", problems[0])
-    action = "P단에서만 유지하고 상세 원문의 첫 오류와 순정 SCC 복구 상태를 확인하세요."
+    action = "P단에서만 유지하고 상세 원문의 첫 오류와 복구 상태를 확인하세요."
   elif warnings:
-    overall = _label("주의", "치명 오류는 없지만 실차 제어 준비가 완전히 확인되지 않았습니다.")
-    action = "P단 진단 결과를 먼저 검토하세요. 이 파일만 공유하면 됩니다."
+    overall = _label("주의", "치명 오류는 없지만 일부 보조 진단값을 확인하지 못했습니다.")
+    action = "이 파일 하나만 공유하면 됩니다. 실제 주행 전 계기판 경고가 없어야 합니다."
   else:
     overall = _label("정상 후보", "8초 P단 진단에서 치명 오류를 찾지 못했습니다.")
     action = "정적·P단 진단 결과이며 실제 도로 안전을 보증하지 않습니다."
 
-  vehicle_status = _label("정상" if cp.get("isNexo") else "실패", f"{cp.get('fingerprint')} / carName={cp.get('carName')}")
-  card_status = _label("정상" if card_running and heartbeat_fresh else "실패", f"process={card_running}, heartbeat={heartbeat_text}")
-  carstate_status = _label("정상" if carstate_alive else "실패", f"alive={services.get('carState', {}).get('alive')}, valid={services.get('carState', {}).get('valid')}, age={services.get('carState', {}).get('ageMs')}ms")
+  vehicle_status = _label("정상" if cp.get("isNexo") else "실패", f"{cp.get('fingerprint')} / brand={cp.get('brand')}")
+  card_status = _label("정상" if card_healthy else "실패", f"process={card_running}, heartbeat={heartbeat_text}, carStateFresh={carstate_alive}")
+  carstate_status = _label("정상" if carstate_alive else "실패", f"seen={services.get('carState', {}).get('seen')}, valid={services.get('carState', {}).get('valid')}, age={services.get('carState', {}).get('ageMs')}ms")
   radar_status = _label("정상" if radar_tracks > 0 and not radar_error else "주의", f"tracks={radar_tracks}, errors={{{', '.join(f'{k}={radar_info.get(k)}' for k in ('canError', 'radarFault', 'wrongConfig', 'unavailableTemporary'))}}}")
-  panda_status = _label("실패" if active and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
-  restore_status = _label(
-    "실패" if marker_pending else "정상",
-    "복구 대기 마커 있음" if marker_pending else f"복구 대기 마커 없음 / 마지막 ACK={restore_ack}",
-  )
+  panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
+  restore_status = _label("실패" if marker.get("problem") else "정상", str(marker.get("description")))
 
   safety_configs = cp.get("safetyConfigs") or []
   safety_text = ", ".join(f"{item['model']}({item['param']})" for item in safety_configs) or "없음"
@@ -359,14 +414,15 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     f"gear={cs_info.get('gear', '확인 불가')} | speed={cs_info.get('vEgoKph', '확인 불가')}km/h | cruise available/enabled={cs_info.get('cruiseAvailable')}/{cs_info.get('cruiseEnabled')} | brake/gas={cs_info.get('brakePressed')}/{cs_info.get('gasPressed')}",
     "",
     "[8초 CAN 흐름]",
-    f"SCC 전체: 순정={stock_scc} openpilot={op_scc} Panda차단={blocked_scc}",
-    f"FCA 전체: 순정={stock_fca} openpilot={op_fca} Panda차단={blocked_fca}",
+    f"SCC 전체: 차량수신={stock_scc} Panda송신흔적={op_scc} Panda차단={blocked_scc}",
+    f"FCA 전체: 차량수신={stock_fca} Panda송신흔적={op_fca} Panda차단={blocked_fca}",
     f"SCC12 핵심: 요청={scc12['requested']} 성공={scc12['accepted']} 차단={scc12['blocked']} 차량수신={scc12['vehicle']}",
     f"레이더 트랙={radar_tracks} | UDS 순정SCC중지 후보={uds_suppress_ok} | 레이더설정 후보={radar_init_ok}",
     "※ controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상일 수 있습니다.",
-    "※ 순정 SCC와 openpilot SCC가 같은 8초에 보여도 시간적으로 겹쳤다는 뜻은 아닙니다.",
+    "※ 같은 주소가 여러 src에 보여도 버스·방향·차단 상태가 달라 실제 동시 제어를 뜻하지 않습니다.",
     "",
     f"[핵심 프로세스] {process_text}",
+    f"[takeover 마커] stage={marker.get('stage')} raw={marker.get('raw') or '없음'}",
     f"[순정 SCC 복구 마지막 기록] {restore_last_line[:240]}",
     f"[메시지별 흐름] {flow_text}",
   ]
@@ -393,7 +449,9 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
       "blockedFca": blocked_fca,
       "radarTracks": radar_tracks,
     },
-    "takeoverMarkerPending": marker_pending,
+    "takeoverMarkerExists": marker.get("exists"),
+    "takeoverMarkerStage": marker.get("stage"),
+    "takeoverMarkerPending": marker.get("problem"),
     "restoreAcknowledgedInLog": restore_ack,
     "restoreLastLine": restore_last_line,
     "currentFailureReason": _text_param(core, "NexoCardSessionReason") or _text_param(core, "NexoLongitudinalFailure"),
