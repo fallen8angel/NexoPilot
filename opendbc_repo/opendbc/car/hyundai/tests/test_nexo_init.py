@@ -44,13 +44,31 @@ class TestNexoLongitudinalInit(unittest.TestCase):
       return True
 
     with patch.object(interface, "disable_ecu", side_effect=disable), \
-         patch.object(interface, "enable_radar_tracks", return_value=True) as radar_enable:
+         patch.object(interface, "enable_radar_tracks", return_value=True) as radar_enable, \
+         patch.object(interface, "ensure_nexo_stock_scc_silent", return_value=True) as verify_silence:
       CarInterface.init(self.CP, self.can_recv, self.can_send)
 
     self.assertEqual([b"\x28\x83\x01"], calls)
     self.assertEqual(40, radar_enable.call_args.kwargs["retries"])
+    verify_silence.assert_called_once()
     self.assertTrue(interface.nexo_stock_scc_restore_pending())
     self.assertIn("longitudinal_takeover_ready", self.marker.read_text())
+
+  def test_source0_scc_verification_failure_restores_stock_before_raising(self):
+    calls = []
+
+    def disable(*args, **kwargs):
+      calls.append(kwargs["com_cont_req"])
+      return True
+
+    with patch.object(interface, "disable_ecu", side_effect=disable), \
+         patch.object(interface, "enable_radar_tracks", return_value=True), \
+         patch.object(interface, "ensure_nexo_stock_scc_silent", return_value=False):
+      with self.assertRaisesRegex(RuntimeError, "stock SCC remained active"):
+        CarInterface.init(self.CP, self.can_recv, self.can_send)
+
+    self.assertEqual([b"\x28\x83\x01", b"\x28\x80\x01"], calls)
+    self.assertFalse(interface.nexo_stock_scc_restore_pending())
 
   def test_radar_failure_restores_stock_before_raising(self):
     calls = []

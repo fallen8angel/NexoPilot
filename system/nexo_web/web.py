@@ -28,6 +28,7 @@ from http.server import ThreadingHTTPServer
 
 from system.nexo_web import nexo_cluster_warning_diagnostics as warning_diagnostics
 from system.nexo_web import nexo_cluster_warning_policy as warning_policy
+from system.nexo_web import nexo_ai_parity_diagnostics as ai_parity_diagnostics
 from system.nexo_web import nexo_diagnostics_v2 as diagnostics_v2
 from system.nexo_web import nexo_driver_monitoring_diagnostics as dm_diagnostics
 from system.nexo_web import nexo_runtime_guard_diagnostics as guard_diagnostics
@@ -55,7 +56,8 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   dm_report = dm_diagnostics.prepend_driver_monitoring_report(core, unified_report)
   guard_report = guard_diagnostics.prepend_runtime_guard_report(dm_report)
   warning_report = warning_diagnostics.prepend_cluster_warning_report(core, guard_report)
-  return warning_policy.correct_stationary_cluster_warning(warning_report)
+  stationary_corrected_report = warning_policy.correct_stationary_cluster_warning(warning_report)
+  return ai_parity_diagnostics.prepend_ai_parity_report(core, stationary_corrected_report)
 
 
 def diagnostic_page(message: str = "") -> str:
@@ -70,7 +72,7 @@ core.important_log_output = important_log_output
 core.raw_can_diagnostic_output = raw_can_diagnostic_output
 core.longitudinal_blackbox_output = longitudinal_blackbox_output
 core.diagnostic_page = diagnostic_page
-core.Handler.server_version = "NexoPilotWeb/7.6"
+core.Handler.server_version = "NexoPilotWeb/7.7"
 
 
 class StableThreadingHTTPServer(ThreadingHTTPServer):
