@@ -15,8 +15,10 @@ DIAGNOSTIC_FILES = (
   "system/nexo_web/nexo_runtime_guard_diagnostics.py",
   "system/nexo_web/nexo_cluster_warning_diagnostics.py",
   "system/nexo_web/nexo_cluster_warning_policy.py",
+  "system/nexo_web/nexo_ai_parity_diagnostics.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
   "opendbc_repo/opendbc/car/hyundai/interface.py",
+  "opendbc_repo/opendbc/car/hyundai/nexo_takeover.py",
 )
 
 
@@ -45,8 +47,10 @@ def main() -> None:
   guard_web = sources["system/nexo_web/nexo_runtime_guard_diagnostics.py"]
   warning_web = sources["system/nexo_web/nexo_cluster_warning_diagnostics.py"]
   warning_policy = sources["system/nexo_web/nexo_cluster_warning_policy.py"]
+  ai_parity = sources["system/nexo_web/nexo_ai_parity_diagnostics.py"]
   radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
   interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
+  takeover = sources["opendbc_repo/opendbc/car/hyundai/nexo_takeover.py"]
 
   for token in ("NEXO_FCA_ADDRS", "NEXO_CAN_HISTORY_S = 5.0", "fault_snapshot", "recent_can",
                 "NEXO_GUARD_STATE_LOG", "_write_guard_state", '"state": "armed"',
@@ -93,11 +97,17 @@ def main() -> None:
                 "P단·정지·크루즈 비활성"):
     require(token in warning_policy, f"park warning policy missing: {token}")
 
+  for token in ("AI 실차 기준·NEXO SCC 인계 확인", "NEXO_TAKEOVER_VERIFY_LOG",
+                "Tester Present(0x7D0)", "source0 SCC", "prepend_ai_parity_report"):
+    require(token in ai_parity, f"AI parity diagnostics missing: {token}")
+  for token in ("ensure_nexo_stock_scc_silent", "source0_scc_total", "attempts: int = 3",
+                "communication_control"):
+    require(token in takeover, f"post-radar SCC verifier missing: {token}")
+
+  read_only_sources = (unified, guard_web, warning_web, warning_policy, ai_parity)
   for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "git_run(\"merge\""):
-    require(forbidden not in unified, f"unified diagnostics must remain read-only: {forbidden}")
-    require(forbidden not in guard_web, f"runtime guard diagnostics must remain read-only: {forbidden}")
-    require(forbidden not in warning_web, f"cluster warning diagnostics must remain read-only: {forbidden}")
-    require(forbidden not in warning_policy, f"park warning policy must remain read-only: {forbidden}")
+    for source in read_only_sources:
+      require(forbidden not in source, f"web diagnostics must remain read-only: {forbidden}")
 
   require("diagnostics_v2.longitudinal_blackbox_output" in entry, "web v2 blackbox not wired")
   require("unified_diagnostics.correct_legacy_wording" in entry, "legacy false-positive correction not wired")
@@ -105,17 +115,19 @@ def main() -> None:
   require("guard_diagnostics.prepend_runtime_guard_report" in entry, "runtime guard report not wired")
   require("warning_diagnostics.prepend_cluster_warning_report" in entry, "cluster warning report not wired")
   require("warning_policy.correct_stationary_cluster_warning" in entry, "park warning policy not wired")
-  require("NexoPilotWeb/7.6" in entry, "port 7000 server version not advanced for warning policy")
+  require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
+  require("NexoPilotWeb/7.7" in entry, "port 7000 server version not advanced for AI parity diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
     require(token in radar, f"radar UDS diagnostics missing: {token}")
   require("def _trace_nexo_long_init" in interface, "NEXO init trace helper missing")
   require("elapsed_ms" in interface, "disable ECU timing trace missing")
+  require("ensure_nexo_stock_scc_silent" in interface, "post-radar SCC verifier not wired")
   require("DEINIT stock SCC communication restore" in interface, "NEXO deinit restore trace missing")
   require("CarInterface.init(CP, can_recv, can_send, communication_control)" in interface,
           "non-NEXO deinit fallback missing")
-  print("NEXO diagnostics v7 parked-warning policy PASS")
+  print("NEXO diagnostics v8 AI parity policy PASS")
 
 
 if __name__ == "__main__":
