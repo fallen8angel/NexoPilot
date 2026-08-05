@@ -67,6 +67,7 @@ def _sample_live(duration_s: float = 1.15) -> dict[str, object]:
 
 
 def prepend_ai_parity_report(core, report: str) -> str:
+  del core
   state = _state()
   current_boot = _boot_id()
   state_current = bool(current_boot and state.get("boot_id") == current_boot)
@@ -105,5 +106,4 @@ def prepend_ai_parity_report(core, report: str) -> str:
     "※ 계기판 SCC·FCA·ADAS 경고등이 실제로 켜져 있으면 판정과 무관하게 주행하지 마세요.",
     "",
   ]
-  return "
-".join(lines) + report
+  return "\n".join(lines) + report
