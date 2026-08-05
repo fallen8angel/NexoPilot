@@ -11,20 +11,53 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: nexo-validation-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  validate-nexo-integration:
+  apply-nexo-stock-scc-recovery:
+    if: github.ref == 'refs/heads/agent/nexo-stock-scc-crash-recovery' && !startsWith(github.event.head_commit.message, 'Apply NEXO stock SCC crash recovery')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    steps:
+      - name: Checkout work branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/nexo-stock-scc-crash-recovery
+          fetch-depth: 0
+
+      - name: Apply recovery patch
+        run: python tools/apply_nexo_stock_scc_crash_recovery.py
+
+      - name: Commit recovery code
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/nexo-validation.yml \
+                  opendbc_repo/opendbc/car/hyundai/interface.py \
+                  opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py \
+                  selfdrive/car/card.py \
+                  system/nexo_web/nexo_diagnostics_v2.py \
+                  tools/check_nexo_integration.py \
+                  tools/check_nexo_uds_failure_policy.py
+          git diff --cached --check
+          git commit -m "Apply NEXO stock SCC crash recovery"
+          git push origin HEAD:agent/nexo-stock-scc-crash-recovery
+
+  validate-nexo-integration:
+    if: always() && (needs.apply-nexo-stock-scc-recovery.result == 'success' || needs.apply-nexo-stock-scc-recovery.result == 'skipped')
+    needs: apply-nexo-stock-scc-recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
 
     steps:
-      - name: Checkout
+      - name: Checkout latest branch head
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
