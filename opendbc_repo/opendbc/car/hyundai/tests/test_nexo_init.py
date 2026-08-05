@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from opendbc.car.hyundai import interface
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.values import CAR
 
@@ -15,82 +18,107 @@ class TestNexoLongitudinalInit(unittest.TestCase):
     )
     self.can_recv = lambda wait_for_one=False: []
     self.can_send = object()
+    self.temporary = tempfile.TemporaryDirectory()
+    root = Path(self.temporary.name)
+    self.marker = root / "takeover"
+    self.restore_log = root / "restore.log"
+    self.long_log = root / "long.log"
+    self.patchers = (
+      patch.object(interface, "NEXO_SCC_TAKEOVER_MARKER", self.marker),
+      patch.object(interface, "NEXO_SCC_RESTORE_LOG", self.restore_log),
+      patch.object(interface, "NEXO_LONG_INIT_LOG", str(self.long_log)),
+    )
+    for patcher in self.patchers:
+      patcher.start()
 
-  def test_uses_verified_disable_then_radar_sequence(self):
+  def tearDown(self):
+    for patcher in reversed(self.patchers):
+      patcher.stop()
+    self.temporary.cleanup()
+
+  def test_successful_takeover_leaves_recovery_marker(self):
     calls = []
 
     def disable(*args, **kwargs):
-      calls.append("disable")
+      calls.append(kwargs["com_cont_req"])
       return True
 
-    def enable(*args, **kwargs):
-      calls.append("enable")
-      return True
-
-    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=disable), \
-         patch("opendbc.car.hyundai.interface._nexo_stock_scc_active", return_value=False) as stock_active, \
-         patch("opendbc.car.hyundai.interface.enable_radar_tracks", side_effect=enable) as radar_enable:
+    with patch.object(interface, "disable_ecu", side_effect=disable), \
+         patch.object(interface, "enable_radar_tracks", return_value=True) as radar_enable:
       CarInterface.init(self.CP, self.can_recv, self.can_send)
 
-    self.assertEqual(["disable", "enable"], calls)
-    stock_active.assert_called_once_with(self.can_recv, 0)
+    self.assertEqual([b"\x28\x83\x01"], calls)
     self.assertEqual(40, radar_enable.call_args.kwargs["retries"])
+    self.assertTrue(interface.nexo_stock_scc_restore_pending())
+    self.assertIn("longitudinal_takeover_ready", self.marker.read_text())
 
-  def test_missing_disable_ack_falls_back_before_radar_activation(self):
-    with patch("opendbc.car.hyundai.interface.disable_ecu", return_value=False) as disable, \
-         patch("opendbc.car.hyundai.interface._nexo_stock_scc_active") as stock_active, \
-         patch("opendbc.car.hyundai.interface.enable_radar_tracks") as enable:
-      with self.assertRaisesRegex(RuntimeError, "could not be disabled"):
-        CarInterface.init(self.CP, self.can_recv, self.can_send)
-
-    disable.assert_called_once()
-    stock_active.assert_not_called()
-    enable.assert_not_called()
-
-  def test_stock_scc_remaining_active_restores_stock_before_fallback(self):
+  def test_radar_failure_restores_stock_before_raising(self):
     calls = []
 
     def disable(*args, **kwargs):
       calls.append(kwargs["com_cont_req"])
       return True
 
-    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=disable), \
-         patch("opendbc.car.hyundai.interface._nexo_stock_scc_active", return_value=True), \
-         patch("opendbc.car.hyundai.interface.enable_radar_tracks") as enable:
-      with self.assertRaisesRegex(RuntimeError, "stock SCC remained active"):
-        CarInterface.init(self.CP, self.can_recv, self.can_send)
-
-    enable.assert_not_called()
-    self.assertEqual(b"\x28\x83\x01", calls[0])
-    self.assertEqual(b"\x28\x80\x01", calls[1])
-
-  def test_radar_failure_restores_stock_scc_before_safe_recovery(self):
-    calls = []
-
-    def disable(*args, **kwargs):
-      calls.append(kwargs["com_cont_req"])
-      return True
-
-    with patch("opendbc.car.hyundai.interface.disable_ecu", side_effect=disable), \
-         patch("opendbc.car.hyundai.interface._nexo_stock_scc_active", return_value=False), \
-         patch("opendbc.car.hyundai.interface.enable_radar_tracks", return_value=False) as enable:
+    with patch.object(interface, "disable_ecu", side_effect=disable), \
+         patch.object(interface, "enable_radar_tracks", return_value=False):
       with self.assertRaisesRegex(RuntimeError, "radar track activation"):
         CarInterface.init(self.CP, self.can_recv, self.can_send)
 
-    self.assertEqual(40, enable.call_args.kwargs["retries"])
     self.assertEqual(b"\x28\x83\x01", calls[0])
     self.assertEqual(b"\x28\x80\x01", calls[1])
+    self.assertFalse(interface.nexo_stock_scc_restore_pending())
 
-  def test_stock_cruise_does_not_touch_radar(self):
+  def test_unexpected_init_exception_also_restores(self):
+    calls = []
+
+    def disable(*args, **kwargs):
+      calls.append(kwargs["com_cont_req"])
+      return True
+
+    with patch.object(interface, "disable_ecu", side_effect=disable), \
+         patch.object(interface, "enable_radar_tracks", side_effect=ValueError("boom")):
+      with self.assertRaisesRegex(ValueError, "boom"):
+        CarInterface.init(self.CP, self.can_recv, self.can_send)
+
+    self.assertEqual([b"\x28\x83\x01", b"\x28\x80\x01"], calls)
+    self.assertFalse(interface.nexo_stock_scc_restore_pending())
+
+  def test_restore_retries_and_only_then_clears_marker(self):
+    self.marker.write_text("pending")
+    with patch.object(interface, "disable_ecu", side_effect=[False, True]) as disable:
+      restored = interface.restore_nexo_stock_scc_communication(
+        self.can_recv, self.can_send, reason="test", retries=3,
+      )
+    self.assertTrue(restored)
+    self.assertEqual(2, disable.call_count)
+    self.assertFalse(self.marker.exists())
+
+  def test_failed_restore_keeps_marker_for_next_start(self):
+    self.marker.write_text("pending")
+    with patch.object(interface, "disable_ecu", return_value=False):
+      restored = interface.restore_nexo_stock_scc_communication(
+        self.can_recv, self.can_send, reason="test", retries=2,
+      )
+    self.assertFalse(restored)
+    self.assertTrue(self.marker.exists())
+    self.assertIn("restore_pending", self.marker.read_text())
+
+  def test_stock_cruise_without_marker_does_not_touch_uds(self):
     self.CP.openpilotLongitudinalControl = False
-    with patch("opendbc.car.hyundai.interface.disable_ecu") as disable, \
-         patch("opendbc.car.hyundai.interface._nexo_stock_scc_active") as stock_active, \
-         patch("opendbc.car.hyundai.interface.enable_radar_tracks") as enable:
+    with patch.object(interface, "disable_ecu") as disable, \
+         patch.object(interface, "enable_radar_tracks") as enable:
       CarInterface.init(self.CP, self.can_recv, self.can_send)
-
     disable.assert_not_called()
-    stock_active.assert_not_called()
     enable.assert_not_called()
+
+  def test_stock_mode_deinit_repairs_stale_takeover_marker(self):
+    self.CP.openpilotLongitudinalControl = False
+    self.marker.write_text("pending")
+    with patch.object(interface, "disable_ecu", return_value=True) as disable:
+      restored = CarInterface.deinit(self.CP, self.can_recv, self.can_send)
+    self.assertTrue(restored)
+    self.assertEqual(b"\x28\x80\x01", disable.call_args.kwargs["com_cont_req"])
+    self.assertFalse(self.marker.exists())
 
 
 if __name__ == "__main__":

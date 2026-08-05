@@ -185,9 +185,13 @@ def validate_recovery() -> None:
     '"NEXO radar track activation failed"',
     '"NEXO stock SCC communication could not be disabled"',
     '"NEXO stock SCC returned during longitudinal control"',
-    'params.put("NexoLongitudinalFailure", reason, block=True)',
+    '_safe_nexo_param_put(params, "NexoLongitudinalFailure", reason, block=True)',
     "self.nexo_long_init_failed",
     "self._handle_nexo_long_failure(error)",
+    "self._restore_nexo_stock_scc_if_pending",
+    "card startup stale takeover",
+    "card thread exit",
+    "uncaught card exception",
     "record_nexo_card_crash",
     "record_nexo_long_success",
     "NexoCardHeartbeatMono",
@@ -199,8 +203,10 @@ def validate_recovery() -> None:
   for token in required:
     require(token in source, f"NEXO failure latch missing: {token}")
 
-  require("self.CI.deinit(self.CP, *self.can_callbacks)" not in source,
-          "card failure latch must not re-enter NEXO radar diagnostics")
+  require("self.CI.init(self.CP, *self.can_callbacks)" not in source[source.index("def _handle_nexo_long_failure"):source.index("def state_update")],
+          "failure latch must never re-enter radar initialization")
+  require("self.CI.deinit(self.CP, *self.can_callbacks)" in source,
+          "dedicated stock SCC restore path is not connected")
 
   recovery = source[source.index("def recover_nexo_stock_cruise"):source.index("def can_comm_callbacks")]
   for forbidden in ("AlphaLongitudinalEnabled", "ExperimentalMode", "DoReboot", "CarParamsCache"):

@@ -51,12 +51,29 @@ def obd_callback(params: Params) -> ObdCallback:
   return set_obd_multiplexing
 
 
+def _safe_nexo_param_put(params: Params, key: str, value: str, *, block: bool = False) -> bool:
+  try:
+    params.put(key, value, block=block)
+    return True
+  except Exception as error:
+    cloudlog.warning(f"NEXO diagnostic Params put ignored key={key}: {error}")
+    return False
+
+
+def _safe_nexo_param_remove(params: Params, key: str) -> bool:
+  try:
+    params.remove(key)
+    return True
+  except Exception as error:
+    cloudlog.warning(f"NEXO diagnostic Params remove ignored key={key}: {error}")
+    return False
+
+
 def recover_nexo_stock_cruise(params: Params, car_fingerprint: str, error: Exception) -> bool:
   """Record a NEXO longitudinal failure without changing settings or rebooting.
 
-  The caller must stop longitudinal CAN output for the current process and make
-  a best-effort request to restore factory SCC communication. User selections
-  remain untouched so a manual vehicle restart can retry the same configuration.
+  Diagnostic bookkeeping is deliberately non-fatal. A stale compiled Params
+  registry must never prevent the factory SCC restoration path from running.
   """
   if car_fingerprint != "HYUNDAI_NEXO_1ST_GEN":
     return False
@@ -65,7 +82,7 @@ def recover_nexo_stock_cruise(params: Params, car_fingerprint: str, error: Excep
   if not any(message in reason for message in NEXO_LONGITUDINAL_INIT_FAILURES):
     return False
 
-  params.put("NexoLongitudinalFailure", reason, block=True)
+  _safe_nexo_param_put(params, "NexoLongitudinalFailure", reason, block=True)
   cloudlog.error(f"NEXO longitudinal setup failed; controls latched off for this session, settings preserved: {reason}")
   return True
 
@@ -154,7 +171,11 @@ class Car:
     self.nexo_stage = "constructed"
     self.nexo_session_state = "waiting_for_long_init" if self.nexo_stock_scc_guard.enabled else "stock_cruise"
     self.nexo_last_heartbeat = 0.0
+    self.nexo_restore_attempted = False
     if self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN":
+      # Repair an interrupted prior takeover before this process can attempt a
+      # new one. With no marker this is inert, including in normal stock cruise.
+      self._restore_nexo_stock_scc_if_pending("card startup stale takeover")
       set_nexo_runtime_state(self.params, self.nexo_session_state, self.nexo_stage)
 
     if self.CP.secOcRequired:
@@ -197,6 +218,39 @@ class Car:
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
+  def _restore_nexo_stock_scc_if_pending(self, reason: str) -> bool:
+    if self.CP.carFingerprint != "HYUNDAI_NEXO_1ST_GEN":
+      return True
+
+    try:
+      from opendbc.car.hyundai.interface import nexo_stock_scc_restore_pending
+      pending = nexo_stock_scc_restore_pending()
+    except Exception as error:
+      cloudlog.warning(f"NEXO restore marker read failed: {error}")
+      pending = True
+
+    if not pending:
+      return True
+
+    self.nexo_restore_attempted = True
+    previous_stage = getattr(self, "nexo_stage", "unknown")
+    self.nexo_stage = "stock_scc_restoring"
+    try:
+      result = self.CI.deinit(self.CP, *self.can_callbacks)
+    except Exception as error:
+      cloudlog.exception(f"NEXO stock SCC restore failed reason={reason}: {error}")
+      self.nexo_stage = previous_stage
+      return False
+
+    try:
+      pending_after = nexo_stock_scc_restore_pending()
+    except Exception:
+      pending_after = not bool(result)
+    restored = bool(result) or not pending_after
+    cloudlog.warning(f"NEXO stock SCC restore reason={reason} restored={restored}")
+    self.nexo_stage = previous_stage
+    return restored
+
   def _update_nexo_heartbeat(self, force: bool = False) -> None:
     if self.CP.carFingerprint != "HYUNDAI_NEXO_1ST_GEN":
       return
@@ -217,13 +271,12 @@ class Car:
     if not recover_nexo_stock_cruise(self.params, self.CP.carFingerprint, error):
       return False
 
-    # Do not issue a second diagnostic sequence here. Initial radar failure paths
-    # restore stock communication inside CarInterface.init(), and a runtime guard
-    # trip already proves that the factory SCC stream is present. Re-entering UDS
-    # from the card loop can terminate the process or create a new cluster fault.
+    # This calls the dedicated restore-only path, never CarInterface.init(), so
+    # it cannot re-run radar programming. Keep the marker when no ECU ack arrives.
+    restored = self._restore_nexo_stock_scc_if_pending(f"longitudinal failure: {error}")
     self.nexo_stock_scc_guard.disarm()
     self.nexo_long_init_failed = True
-    self.nexo_session_state = "failed_latched"
+    self.nexo_session_state = "failed_latched_stock_restored" if restored else "failed_latched_restore_pending"
     self.nexo_stage = "longitudinal_failed_latched"
     self.last_actuators_output = structs.CarControl.Actuators()
     set_nexo_runtime_state(self.params, self.nexo_session_state, self.nexo_stage, str(error))
@@ -320,7 +373,7 @@ class Car:
         if self._handle_nexo_long_failure(error):
           return
         raise
-      self.params.remove("NexoLongitudinalFailure")
+      _safe_nexo_param_remove(self.params, "NexoLongitudinalFailure")
       self.nexo_session_state = "active"
       self.nexo_stage = "longitudinal_active"
       record_nexo_long_success(self.params)
@@ -369,8 +422,14 @@ class Car:
         self.step()
         self.rk.monitor_time()
     finally:
-      e.set()
-      t.join()
+      # Any card exit means NexoPilot SCC output is ending. Restore factory SCC
+      # before the process disappears; a failed ack leaves the persistent marker
+      # for the next card start.
+      try:
+        self._restore_nexo_stock_scc_if_pending("card thread exit")
+      finally:
+        e.set()
+        t.join()
 
 
 def main():
@@ -382,6 +441,13 @@ def main():
     card_process.card_thread()
   except Exception as error:
     stage = getattr(card_process, "nexo_stage", "card_constructor")
+    if card_process is not None:
+      # card_thread finally normally restores first. This is a second, idempotent
+      # fallback for constructor/cleanup paths that did not complete.
+      try:
+        card_process._restore_nexo_stock_scc_if_pending("uncaught card exception")
+      except Exception as restore_error:
+        cloudlog.exception(f"NEXO final stock SCC restore attempt failed: {restore_error}")
     record_nexo_card_crash(params, stage, error, traceback.format_exc())
     raise
 

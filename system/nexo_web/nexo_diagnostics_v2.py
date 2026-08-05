@@ -17,6 +17,8 @@ from opendbc.car.hyundai.values import CAR, DBC as HYUNDAI_DBC
 NEXO_LAST_FAULT_LOG = Path("/data/nexo_last_fault.txt")
 NEXO_CARD_CRASH_LOG = Path("/data/nexo_card_crash.txt")
 NEXO_LONG_SUCCESS_LOG = Path("/data/nexo_long_success.txt")
+NEXO_SCC_TAKEOVER_MARKER = Path("/data/nexo_scc_takeover_active")
+NEXO_SCC_RESTORE_LOG = Path("/data/nexo_scc_restore.log")
 NEXO_SCC_ADDRS = frozenset((0x389, 0x420, 0x421, 0x50A))
 NEXO_FCA_ADDRS = frozenset((0x38D, 0x483))
 NEXO_DIAGNOSTIC_ADDRS = NEXO_SCC_ADDRS | NEXO_FCA_ADDRS | frozenset((0x4A2,))
@@ -124,6 +126,11 @@ def runtime_status_output(core) -> str:
     heartbeat_text = "확인 불가"
 
   success = _json_log(NEXO_LONG_SUCCESS_LOG)
+  takeover_pending = NEXO_SCC_TAKEOVER_MARKER.exists()
+  try:
+    restore_log = NEXO_SCC_RESTORE_LOG.read_text(encoding="utf-8", errors="replace")[-12000:]
+  except OSError:
+    restore_log = "복구 시도 기록 없음"
   lines = [
     f"card 프로세스: {'실행 중' if card_processes else '실행 중 아님'}",
     *(card_processes[:4] or ["프로세스 행 없음"]),
@@ -131,7 +138,11 @@ def runtime_status_output(core) -> str:
     f"세션 상태: {value('NexoCardSessionState') or '확인 불가'}",
     f"마지막 단계: {value('NexoCardStage') or '확인 불가'}",
     f"현재 실패 이유: {value('NexoCardSessionReason') or value('NexoLongitudinalFailure') or '없음'}",
+    f"순정 SCC 복구 대기 마커: {'있음 - 일반 크루즈 복구 필요' if takeover_pending else '없음'}",
     f"마지막 성공 기록: {json.dumps(success, ensure_ascii=False) if success else '없음'}",
+    "",
+    "[순정 SCC 복구 시도]",
+    restore_log,
   ]
   return chr(10).join(lines)
 
