@@ -32,22 +32,20 @@ for name, (source, token) in required.items():
   if token not in source:
     raise SystemExit(f"missing {name}: {token}")
 
-# Guardrails: generic Hyundai longitudinal behavior stays unchanged. Only the
-# NEXO-specific dynamic SCC list opts out of the generic relay latch because the
-# card runtime guard is the fail-closed source-0 authority.
+# Guardrails: generic Hyundai and NEXO-specific SCC relay detection both remain
+# enabled. The post-radar source-0 verifier and card runtime guard are additional
+# fail-closed layers, not replacements for Panda relay protection.
 normal_macro = safety.split("#define HYUNDAI_LONG_COMMON_TX_MSGS", 1)[1].split("#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[0]
 nexo_macro = safety.split("#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[1].split("#define HYUNDAI_COMMON_RX_CHECKS", 1)[0]
 if "disable_static_blocking" in normal_macro:
   raise SystemExit("generic Hyundai longitudinal static forwarding was weakened")
 if ".check_relay = true" not in normal_macro:
   raise SystemExit("generic Hyundai relay protection was changed")
-if ".check_relay = true" in nexo_macro:
-  raise SystemExit("NEXO SCC list still uses the generic relay latch")
 for addr in ("0x420", "0x421", "0x50A", "0x389"):
-  if f"{{{addr}, 0,       8, .check_relay = false, .disable_static_blocking = true}}" not in nexo_macro:
-    raise SystemExit(f"NEXO dynamic SCC entry missing safe relay policy: {addr}")
+  if f"{{{addr}, 0,       8, .check_relay = true, .disable_static_blocking = true}}" not in nexo_macro:
+    raise SystemExit(f"NEXO SCC relay protection missing: {addr}")
 if "gas_pressed = brake_pressed = false" in safety:
   raise SystemExit("unsafe AI pedal bypass detected")
 if "is_fca_addr" in safety:
   raise SystemExit("NEXO ownership must not claim stock FCA")
-print("NEXO AI SCC ownership, neutral handoff, and compatibility checks passed")
+print("NEXO AI SCC ownership, neutral handoff, relay protection, and compatibility checks passed")
