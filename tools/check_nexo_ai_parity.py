@@ -14,6 +14,7 @@ takeover = text("opendbc_repo/opendbc/car/hyundai/nexo_takeover.py")
 web = text("system/nexo_web/web.py")
 diagnostics = text("system/nexo_web/nexo_ai_parity_diagnostics.py")
 workflow = text(".github/workflows/nexo-validation.yml")
+neutral_test_path = "opendbc_repo/opendbc/safety/tests/test_hyundai_nexo_neutral_ownership.py"
 
 assert "ensure_nexo_stock_scc_silent" in interface
 assert 'RuntimeError("NEXO stock SCC remained active")' in interface
@@ -26,21 +27,22 @@ assert "StableThreadingHTTPServer" in web
 assert "allow_reuse_address = True" in web
 assert "daemon_threads = True" in web
 assert "request_queue_size = 32" in web
-assert "messaging.sub_sock("can"" in diagnostics
-assert "messaging.sub_sock("sendcan"" in diagnostics
+assert 'messaging.sub_sock("can"' in diagnostics
+assert 'messaging.sub_sock("sendcan"' in diagnostics
 assert "PubMaster" not in diagnostics
 assert "pub_sock" not in diagnostics
-assert "TestHyundaiNexoNeutralSccOwnership" in text("opendbc_repo/opendbc/safety/tests/test_hyundai_nexo_neutral.py")
+assert "TestHyundaiNexoNeutralOwnership" in text(neutral_test_path)
 assert "TestNexoTakeoverVerification" in text("opendbc_repo/opendbc/car/hyundai/tests/test_nexo_takeover.py")
 assert "Check NEXO verified SCC takeover and AI parity diagnostics" in workflow
 assert "Test NEXO post-radar SCC silence verification" in workflow
 assert "Test NEXO neutral SCC ownership" in workflow
+assert "test_hyundai_nexo_neutral_ownership" in workflow
 
 for path in (
   "opendbc_repo/opendbc/car/hyundai/nexo_takeover.py",
   "system/nexo_web/nexo_ai_parity_diagnostics.py",
   "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_takeover.py",
-  "opendbc_repo/opendbc/safety/tests/test_hyundai_nexo_neutral.py",
+  neutral_test_path,
 ):
   ast.parse(text(path), filename=path)
 
