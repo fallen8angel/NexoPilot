@@ -14,6 +14,7 @@ DIAGNOSTIC_FILES = (
   "system/nexo_web/nexo_unified_diagnostics.py",
   "system/nexo_web/nexo_runtime_guard_diagnostics.py",
   "system/nexo_web/nexo_cluster_warning_diagnostics.py",
+  "system/nexo_web/nexo_cluster_warning_policy.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
   "opendbc_repo/opendbc/car/hyundai/interface.py",
 )
@@ -43,6 +44,7 @@ def main() -> None:
   unified = sources["system/nexo_web/nexo_unified_diagnostics.py"]
   guard_web = sources["system/nexo_web/nexo_runtime_guard_diagnostics.py"]
   warning_web = sources["system/nexo_web/nexo_cluster_warning_diagnostics.py"]
+  warning_policy = sources["system/nexo_web/nexo_cluster_warning_policy.py"]
   radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
   interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
 
@@ -86,17 +88,24 @@ def main() -> None:
                 "prepend_cluster_warning_report"):
     require(token in warning_web, f"cluster warning diagnostics missing: {token}")
 
+  for token in ("correct_stationary_cluster_warning", "_EXPECTED_PARK_EVENTS", "wrongGear",
+                "seatbeltNotLatched", "parkBrake", "P단 정지에서 정상으로 제외한 항목",
+                "P단·정지·크루즈 비활성"):
+    require(token in warning_policy, f"park warning policy missing: {token}")
+
   for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "git_run(\"merge\""):
     require(forbidden not in unified, f"unified diagnostics must remain read-only: {forbidden}")
     require(forbidden not in guard_web, f"runtime guard diagnostics must remain read-only: {forbidden}")
     require(forbidden not in warning_web, f"cluster warning diagnostics must remain read-only: {forbidden}")
+    require(forbidden not in warning_policy, f"park warning policy must remain read-only: {forbidden}")
 
   require("diagnostics_v2.longitudinal_blackbox_output" in entry, "web v2 blackbox not wired")
   require("unified_diagnostics.correct_legacy_wording" in entry, "legacy false-positive correction not wired")
   require("unified_diagnostics.build_unified_report" in entry, "unified 8-second report not wired")
   require("guard_diagnostics.prepend_runtime_guard_report" in entry, "runtime guard report not wired")
   require("warning_diagnostics.prepend_cluster_warning_report" in entry, "cluster warning report not wired")
-  require("NexoPilotWeb/7.5" in entry, "port 7000 server version not advanced for warning diagnostics")
+  require("warning_policy.correct_stationary_cluster_warning" in entry, "park warning policy not wired")
+  require("NexoPilotWeb/7.6" in entry, "port 7000 server version not advanced for warning policy")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
@@ -106,7 +115,7 @@ def main() -> None:
   require("DEINIT stock SCC communication restore" in interface, "NEXO deinit restore trace missing")
   require("CarInterface.init(CP, can_recv, can_send, communication_control)" in interface,
           "non-NEXO deinit fallback missing")
-  print("NEXO diagnostics v6 cluster-warning report PASS")
+  print("NEXO diagnostics v7 parked-warning policy PASS")
 
 
 if __name__ == "__main__":
