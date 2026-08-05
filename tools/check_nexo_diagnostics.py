@@ -12,6 +12,7 @@ DIAGNOSTIC_FILES = (
   "system/nexo_web/web.py",
   "system/nexo_web/nexo_diagnostics_v2.py",
   "system/nexo_web/nexo_unified_diagnostics.py",
+  "system/nexo_web/nexo_runtime_guard_diagnostics.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
   "opendbc_repo/opendbc/car/hyundai/interface.py",
 )
@@ -39,10 +40,13 @@ def main() -> None:
   entry = sources["system/nexo_web/web.py"]
   web = sources["system/nexo_web/nexo_diagnostics_v2.py"]
   unified = sources["system/nexo_web/nexo_unified_diagnostics.py"]
+  guard_web = sources["system/nexo_web/nexo_runtime_guard_diagnostics.py"]
   radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
   interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
 
-  for token in ("NEXO_FCA_ADDRS", "NEXO_CAN_HISTORY_S = 5.0", "fault_snapshot", "recent_can"):
+  for token in ("NEXO_FCA_ADDRS", "NEXO_CAN_HISTORY_S = 5.0", "fault_snapshot", "recent_can",
+                "NEXO_GUARD_STATE_LOG", "_write_guard_state", '"state": "armed"',
+                '"state": "fault"', '"boot_id"'):
     require(token in guard, f"runtime diagnostic guard missing: {token}")
   for token in ("NEXO_LAST_FAULT_LOG", "record_nexo_fault_snapshot", "safety_rx_checks_invalid", "radar_errors"):
     require(token in writer, f"persistent fault capture missing: {token}")
@@ -68,12 +72,19 @@ def main() -> None:
                 "def correct_legacy_wording", "brand", "card_healthy", "sm.seen"):
     require(token in unified, f"unified 8-second diagnostics missing: {token}")
   require("cp.carName" not in unified, "CarParams has no carName member in this schema")
+
+  for token in ("NEXO runtime guard·검사 단계 확인", "P단 정지 검사", "주행 활성 검사: 미실시",
+                "현재 부팅 기록", "source0 SCC", "runtime guard가 무장되지 않았습니다",
+                "prepend_runtime_guard_report"):
+    require(token in guard_web, f"runtime guard web diagnostics missing: {token}")
   for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "git_run(\"merge\""):
     require(forbidden not in unified, f"unified diagnostics must remain read-only: {forbidden}")
+    require(forbidden not in guard_web, f"runtime guard diagnostics must remain read-only: {forbidden}")
 
   require("diagnostics_v2.longitudinal_blackbox_output" in entry, "web v2 blackbox not wired")
   require("unified_diagnostics.correct_legacy_wording" in entry, "legacy false-positive correction not wired")
   require("unified_diagnostics.build_unified_report" in entry, "unified 8-second report not wired")
+  require("guard_diagnostics.prepend_runtime_guard_report" in entry, "runtime guard report not wired")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
@@ -83,7 +94,7 @@ def main() -> None:
   require("DEINIT stock SCC communication restore" in interface, "NEXO deinit restore trace missing")
   require("CarInterface.init(CP, can_recv, can_send, communication_control)" in interface,
           "non-NEXO deinit fallback missing")
-  print("NEXO diagnostics v4 corrected unified report PASS")
+  print("NEXO diagnostics v5 runtime-guard report PASS")
 
 
 if __name__ == "__main__":
