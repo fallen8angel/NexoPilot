@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import time
 from collections import Counter, deque
 from collections.abc import Iterable
+from pathlib import Path
 
 
 NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x420, 0x421, 0x50A))
@@ -14,6 +16,30 @@ NEXO_RUNTIME_GUARD_WINDOW_S = 0.25
 NEXO_RUNTIME_GUARD_MIN_FRAMES = 3
 NEXO_CAN_HISTORY_S = 5.0
 NEXO_CAN_HISTORY_MAX = 4000
+NEXO_GUARD_STATE_LOG = Path("/data/nexo_scc_guard_state.json")
+
+
+def _boot_id() -> str:
+  try:
+    return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8", errors="replace").strip()
+  except OSError:
+    return ""
+
+
+def _write_guard_state(payload: dict[str, object]) -> None:
+  """Best-effort read-only diagnostics. Never affect guard decisions."""
+  try:
+    output = {
+      "wall_time": time.time(),
+      "monotonic": time.monotonic(),
+      "boot_id": _boot_id(),
+      **payload,
+    }
+    temporary = NEXO_GUARD_STATE_LOG.with_suffix(".tmp")
+    temporary.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(NEXO_GUARD_STATE_LOG)
+  except OSError:
+    pass
 
 
 class NexoStockSccRuntimeGuard:
@@ -38,6 +64,14 @@ class NexoStockSccRuntimeGuard:
     self._detections: deque[tuple[float, int]] = deque()
     self._recent_can: deque[tuple[float, int, int, str]] = deque(maxlen=NEXO_CAN_HISTORY_MAX)
     self._last_fault: dict[str, object] = {}
+    _write_guard_state({
+      "state": "constructed",
+      "enabled": self.enabled,
+      "armed": self.armed,
+      "grace_s": self.grace_s,
+      "window_s": self.window_s,
+      "min_frames": self.min_frames,
+    })
 
   def arm(self, now: float | None = None) -> None:
     self.armed = self.enabled
@@ -45,11 +79,28 @@ class NexoStockSccRuntimeGuard:
     self._detections.clear()
     self._recent_can.clear()
     self._last_fault = {}
+    _write_guard_state({
+      "state": "armed" if self.armed else "disabled",
+      "enabled": self.enabled,
+      "armed": self.armed,
+      "armed_monotonic": self.armed_at,
+      "grace_s": self.grace_s,
+      "window_s": self.window_s,
+      "min_frames": self.min_frames,
+      "fault": {},
+    })
 
   def disarm(self) -> None:
     """Stop runtime detection while retaining the captured fault history."""
     self.armed = False
     self._detections.clear()
+    _write_guard_state({
+      "state": "disarmed",
+      "enabled": self.enabled,
+      "armed": self.armed,
+      "armed_monotonic": self.armed_at,
+      "fault": self._last_fault,
+    })
 
   def _prune(self, timestamp: float) -> None:
     detection_cutoff = timestamp - self.window_s
@@ -77,7 +128,7 @@ class NexoStockSccRuntimeGuard:
           payload = ""
         self._recent_can.append((timestamp, source, address, payload))
 
-      if (grace_complete and getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE and
+      if (grace_complete and source == NEXO_STOCK_SCC_SOURCE and
           address in NEXO_STOCK_SCC_ADDRS):
         self._detections.append((timestamp, address))
 
@@ -105,6 +156,13 @@ class NexoStockSccRuntimeGuard:
         for seen_at, source, address, payload in self._recent_can
       ],
     }
+    _write_guard_state({
+      "state": "fault",
+      "enabled": self.enabled,
+      "armed": self.armed,
+      "armed_monotonic": self.armed_at,
+      "fault": self._last_fault,
+    })
     return True
 
   def fault_snapshot(self) -> dict[str, object]:
