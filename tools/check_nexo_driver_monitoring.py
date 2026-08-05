@@ -48,8 +48,14 @@ def main() -> None:
     "warning_allowed",
     "driverMonitoringState",
     "7000 카메라",
+    "def _enum_numeric_value",
+    'getattr(value, "raw", None)',
+    'alert_name = str(dm.alertLevel)',
+    "sm.seen",
   ):
     require(token in dm_diag, f"8-second driver-monitoring diagnostics missing: {token}")
+  require("int(dm.alertLevel)" not in dm_diag,
+          "pycapnp DynamicEnum must not be converted with int(enum)")
 
   require("dm_diagnostics.prepend_driver_monitoring_report" in web,
           "driver-monitoring status is not included in the 8-second report")
