@@ -70,7 +70,7 @@ jobs:
 
       - name: Test NEXO neutral SCC ownership
         working-directory: opendbc_repo
-        run: python -m unittest opendbc.safety.tests.test_hyundai_nexo_neutral
+        run: python -m unittest opendbc.safety.tests.test_hyundai_nexo_neutral_ownership
 
       - name: Test NEXO post-radar SCC silence verification
         working-directory: opendbc_repo
