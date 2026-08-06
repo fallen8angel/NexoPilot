@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from opendbc.car.disable_ecu import disable_ecu
+from opendbc.car.nexo_session_owner import claim_owner
 
 
 NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x420, 0x421, 0x50A))
@@ -70,6 +71,12 @@ def ensure_nexo_stock_scc_silent(can_recv, can_send, *, bus: int, addr: int,
   ECU, so communication control is re-issued after the DID write and verified
   against live CAN before Panda is switched into Hyundai longitudinal safety.
   """
+  owner = claim_owner()
+  trace(f"STEP 3 takeover owner claim success={bool(owner)} token={owner or 'none'}")
+  if not owner:
+    _write_state({"state": "failed", "success": False, "reason": "takeover owner claim failed", "attempts": []})
+    return False
+
   attempt_records: list[dict[str, object]] = []
 
   for attempt in range(1, attempts + 1):
@@ -105,18 +112,19 @@ def ensure_nexo_stock_scc_silent(can_recv, can_send, *, bus: int, addr: int,
       "detail": detail,
       "enough_bus_data": enough_bus_data,
       "success": success,
+      "owner": owner,
       **observation,
     }
     attempt_records.append(record)
     trace(
       f"STEP 3 attempt={attempt}/{attempts} re-suppress acknowledged={acknowledged} "
       f"source0_frames={observation['source0_frames']} source0_scc={observation['source0_scc_total']} "
-      f"counts={observation['source0_scc_counts']} success={success}"
+      f"counts={observation['source0_scc_counts']} success={success} owner={owner}"
     )
     _write_state({"state": "verified" if success else "checking", "success": success,
-                  "attempts": attempt_records})
+                  "owner": owner, "attempts": attempt_records})
     if success:
       return True
 
-  _write_state({"state": "failed", "success": False, "attempts": attempt_records})
+  _write_state({"state": "failed", "success": False, "owner": owner, "attempts": attempt_records})
   return False
