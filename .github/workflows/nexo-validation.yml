@@ -64,13 +64,9 @@ jobs:
       - name: Install NEXO Panda safety test dependencies
         run: python -m pip install --disable-pip-version-check numpy cffi parameterized pycapnp
 
-      - name: Test NEXO Panda SCC ownership
+      - name: Test NEXO standard FCEV LONG safety
         working-directory: opendbc_repo
-        run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiNexoDynamicSCCOwnership
-
-      - name: Test NEXO neutral SCC ownership
-        working-directory: opendbc_repo
-        run: python -m unittest opendbc.safety.tests.test_hyundai_nexo_neutral_ownership
+        run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiSafetyFCEVLong
 
       - name: Test NEXO post-radar SCC silence verification
         working-directory: opendbc_repo
