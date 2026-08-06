@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from cereal import messaging
@@ -59,6 +60,19 @@ def _sample_panda_faults(duration_s: float = 1.5) -> dict[str, object]:
   }
 
 
+def _synchronize_overall_verdict(report: str, verdict: str, severe: bool) -> str:
+  if not severe:
+    return report
+  report = re.sub(r"^종합 판정\s*:.*$", f"종합 판정 : {verdict}", report, count=1, flags=re.MULTILINE)
+  return re.sub(
+    r"^다음 조치\s*:.*$",
+    "다음 조치 : P단·주차브레이크·완전 정지를 유지하고 Panda fault 원인을 해결하기 전에는 주행하지 마세요.",
+    report,
+    count=1,
+    flags=re.MULTILINE,
+  )
+
+
 def prepend_panda_fault_report(report: str) -> str:
   """Prepend a read-only Panda fault-name report to the 8-second diagnostic file."""
   snapshot = _sample_panda_faults()
@@ -75,6 +89,9 @@ def prepend_panda_fault_report(report: str) -> str:
     verdict = "[주행 금지] Panda RX 안전검사가 invalid 상태입니다."
   else:
     verdict = "[정상 후보] 활성 Panda fault가 없고 RX 안전검사가 정상입니다."
+
+  severe = snapshot.get("seen") is not True or bool(observed) or rx_invalid
+  report = _synchronize_overall_verdict(report, verdict, severe)
 
   lines = [
     "============================================================",
