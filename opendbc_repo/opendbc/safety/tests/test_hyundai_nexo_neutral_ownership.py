@@ -8,6 +8,10 @@ from opendbc.safety.tests.common import CANPackerSafety
 
 
 class TestHyundaiNexoNeutralOwnership(unittest.TestCase):
+  # Metadata used by the cross-mode TX isolation test. This historical dynamic
+  # SCC mode is no longer selected by the production NEXO interface.
+  TX_MSGS = [[0x340, 0], [0x4F1, 0], [0x485, 0], [0x420, 0], [0x421, 0],
+             [0x50A, 0], [0x389, 0], [0x4A2, 0], [0x38D, 0], [0x483, 0], [0x7D0, 0]]
   SCC_ADDRS = (0x389, 0x420, 0x421, 0x50A)
   FCA_ADDRS = (0x38D, 0x483)
   TIMEOUT_US = 400_000
