@@ -19,6 +19,8 @@ def require(condition: bool, message: str) -> None:
 def main() -> None:
   radar = read("opendbc_repo/opendbc/car/hyundai/radar_tracks.py")
   interface = read("opendbc_repo/opendbc/car/hyundai/interface.py")
+  owner = read("opendbc_repo/opendbc/car/nexo_session_owner.py")
+  takeover = read("opendbc_repo/opendbc/car/hyundai/nexo_takeover.py")
   card = read("selfdrive/car/card.py")
   guard = read("selfdrive/car/nexo_guard.py")
   web = read("system/nexo_web/nexo_diagnostics_v2.py")
@@ -26,6 +28,8 @@ def main() -> None:
   for path, source in (
     ("radar_tracks.py", radar),
     ("interface.py", interface),
+    ("nexo_session_owner.py", owner),
+    ("nexo_takeover.py", takeover),
     ("card.py", card),
     ("nexo_guard.py", guard),
     ("nexo_diagnostics_v2.py", web),
@@ -43,9 +47,33 @@ def main() -> None:
     '_set_nexo_takeover_marker("stock_scc_disabled")',
     'except BaseException as error:',
     'reason=f"long init exception: {type(error).__name__}"',
-    'CP.openpilotLongitudinalControl or nexo_stock_scc_restore_pending()',
+    "restore_allowed_unlocked",
+    "current_process_owns",
+    "clear_owner_if_current_unlocked",
+    "RESTORE SKIP",
+    "DEINIT no active NEXO takeover; duplicate restore skipped",
   ):
-    require(token in interface, f"stock SCC restore contract missing: {token}")
+    require(token in interface, f"owner-aware stock SCC restore contract missing: {token}")
+
+  for token in (
+    "NEXO_SCC_OWNER",
+    "NEXO_SCC_OWNER_LOCK",
+    "def current_owner_token",
+    "def claim_owner",
+    "def current_process_owns",
+    "def restore_allowed_unlocked",
+    "active takeover owned by",
+    "def clear_owner_if_current_unlocked",
+  ):
+    require(token in owner, f"takeover process ownership contract missing: {token}")
+
+  for token in (
+    "from opendbc.car.nexo_session_owner import claim_owner",
+    "owner = claim_owner()",
+    "takeover owner claim failed",
+    '"owner": owner',
+  ):
+    require(token in takeover, f"takeover owner claim/trace missing: {token}")
 
   recovery = card[card.index("def recover_nexo_stock_cruise"):card.index("def can_comm_callbacks")]
   for forbidden in ("AlphaLongitudinalEnabled", "ExperimentalMode", "DoReboot", "CarParamsCache"):
@@ -73,7 +101,7 @@ def main() -> None:
   require("순정 SCC 복구 대기 마커" in web, "restore marker is not visible in port 7000")
   require("NEXO_SCC_RESTORE_LOG" in web, "restore attempts are not visible in port 7000")
   require("자동 재부팅 없이 저장됩니다" in web, "no-auto-reboot policy is not visible in diagnostics")
-  print("NEXO stock SCC crash recovery and no-auto-reboot policy PASS")
+  print("NEXO owner-aware SCC crash recovery and no-auto-reboot policy PASS")
 
 
 if __name__ == "__main__":
