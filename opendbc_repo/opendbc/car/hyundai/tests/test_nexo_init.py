@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from opendbc.car import nexo_session_owner
 from opendbc.car.hyundai import interface
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.values import CAR
@@ -23,10 +24,14 @@ class TestNexoLongitudinalInit(unittest.TestCase):
     self.marker = root / "takeover"
     self.restore_log = root / "restore.log"
     self.long_log = root / "long.log"
+    self.owner = root / "owner"
+    self.owner_lock = root / "owner.lock"
     self.patchers = (
       patch.object(interface, "NEXO_SCC_TAKEOVER_MARKER", self.marker),
       patch.object(interface, "NEXO_SCC_RESTORE_LOG", self.restore_log),
       patch.object(interface, "NEXO_LONG_INIT_LOG", str(self.long_log)),
+      patch.object(nexo_session_owner, "NEXO_SCC_OWNER", self.owner),
+      patch.object(nexo_session_owner, "NEXO_SCC_OWNER_LOCK", self.owner_lock),
     )
     for patcher in self.patchers:
       patcher.start()
@@ -120,6 +125,34 @@ class TestNexoLongitudinalInit(unittest.TestCase):
     self.assertFalse(restored)
     self.assertTrue(self.marker.exists())
     self.assertIn("restore_pending", self.marker.read_text())
+
+  def test_older_process_cannot_restore_or_clear_newer_takeover(self):
+    self.marker.write_text("newer longitudinal_takeover_ready")
+    self.owner.write_text("999:1\n")
+
+    with patch.object(nexo_session_owner, "_owner_alive", return_value=True), \
+         patch.object(interface, "disable_ecu") as disable:
+      restored = interface.restore_nexo_stock_scc_communication(
+        self.can_recv, self.can_send, reason="old card exit", retries=1,
+      )
+
+    self.assertTrue(restored)
+    disable.assert_not_called()
+    self.assertTrue(self.marker.exists())
+    self.assertEqual("999:1", self.owner.read_text().strip())
+    self.assertIn("RESTORE SKIP", self.restore_log.read_text())
+
+  def test_owner_restore_clears_owner_and_duplicate_deinit_is_inert(self):
+    self.marker.write_text("owned longitudinal_takeover_ready")
+    self.owner.write_text(nexo_session_owner.current_owner_token() + "\n")
+
+    with patch.object(interface, "disable_ecu", return_value=True) as disable:
+      self.assertTrue(CarInterface.deinit(self.CP, self.can_recv, self.can_send))
+      self.assertTrue(CarInterface.deinit(self.CP, self.can_recv, self.can_send))
+
+    self.assertEqual(1, disable.call_count)
+    self.assertFalse(self.marker.exists())
+    self.assertFalse(self.owner.exists())
 
   def test_stock_cruise_without_marker_does_not_touch_uds(self):
     self.CP.openpilotLongitudinalControl = False
