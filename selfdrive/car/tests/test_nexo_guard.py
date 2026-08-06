@@ -29,20 +29,33 @@ class TestNexoStockSccRuntimeGuard(unittest.TestCase):
     self.assertEqual({"0x389": 1, "0x420": 1, "0x421": 1}, snapshot["stock_scc_counts"])
     self.assertGreaterEqual(len(snapshot["recent_can"]), 5)
 
+  def test_detects_nested_batches_from_card_can_capnp_conversion(self):
+    guard = NexoStockSccRuntimeGuard(True, grace_s=0.0, window_s=0.25, min_frames=3)
+    guard.arm(now=1.0)
+    nested_batches = [
+      [frame(0x420), frame(0x421)],
+      [frame(0x389), frame(0x38D)],
+    ]
+    self.assertTrue(guard.observe(nested_batches, now=1.1))
+    self.assertEqual(
+      {"0x389": 1, "0x420": 1, "0x421": 1},
+      guard.fault_snapshot()["stock_scc_counts"],
+    )
+
   def test_factory_fca_does_not_trip_scc_guard(self):
     guard = NexoStockSccRuntimeGuard(True, grace_s=0.0, min_frames=1)
     guard.arm(now=1.0)
-    self.assertFalse(guard.observe([frame(0x38D), frame(0x483)], now=1.1))
+    self.assertFalse(guard.observe([[frame(0x38D), frame(0x483)]], now=1.1))
 
   def test_ignores_outgoing_and_blocked_sources(self):
     guard = NexoStockSccRuntimeGuard(True, grace_s=0.0, min_frames=1)
     guard.arm(now=1.0)
-    self.assertFalse(guard.observe([frame(0x420, 128), frame(0x421, 192)], now=1.1))
+    self.assertFalse(guard.observe([[frame(0x420, 128)], [frame(0x421, 192)]], now=1.1))
 
   def test_disabled_for_stock_cruise(self):
     guard = NexoStockSccRuntimeGuard(False, grace_s=0.0, min_frames=1)
     guard.arm(now=1.0)
-    self.assertFalse(guard.observe([frame(0x420)], now=1.1))
+    self.assertFalse(guard.observe([[frame(0x420)]], now=1.1))
 
 
 if __name__ == "__main__":
