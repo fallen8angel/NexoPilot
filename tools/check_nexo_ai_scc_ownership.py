@@ -7,45 +7,46 @@ safety_common = Path("opendbc_repo/opendbc/safety/modes/hyundai_common.h").read_
 safety = Path("opendbc_repo/opendbc/safety/modes/hyundai.h").read_text()
 hyundaican = Path("opendbc_repo/opendbc/car/hyundai/hyundaican.py").read_text()
 tests = Path("opendbc_repo/opendbc/safety/tests/test_hyundai.py").read_text()
-neutral_tests = Path("opendbc_repo/opendbc/safety/tests/test_hyundai_nexo_neutral_ownership.py").read_text()
+workflow = Path(".github/workflows/nexo-validation.yml").read_text()
 
 required = {
-  "values flag": (values, "NEXO_DYNAMIC_SCC = 1024"),
-  "interface gating": (interface, "if is_nexo:\n        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.NEXO_DYNAMIC_SCC.value"),
-  "common flag decode": (safety_common, "HYUNDAI_PARAM_NEXO_DYNAMIC_SCC = 1024"),
-  "dedicated tx list": (safety, "HYUNDAI_NEXO_LONG_TX_MSGS"),
-  "accepted SCC12 ownership": (safety, "tx && hyundai_nexo_dynamic_scc && (msg->bus == 0U) && (msg->addr == 0x421U)"),
-  "neutral mode gate": (safety, "hyundai_nexo_dynamic_scc && !get_longitudinal_allowed() && (acc_mode != 0)"),
-  "400ms timeout": (safety, "HYUNDAI_NEXO_SCC_OWNERSHIP_TIMEOUT_US = 400000U"),
-  "bus2 hook": (safety, "hyundai_nexo_dynamic_scc && (bus_num == 2) && hyundai_nexo_is_scc_addr(addr)"),
-  "fwd hook wired": (safety, ".fwd = hyundai_fwd_hook"),
+  "LONG flag": (values, "LONG = 4"),
+  "FCEV flag": (values, "FCEV_GAS = 256"),
+  "mode-aware longitudinal": (interface, "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable"),
+  "standard LONG safety": (interface, "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value"),
+  "NEXO FCEV pedal safety": (interface, "ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.FCEV_GAS.value"),
+  "standard LONG tx list": (safety, "HYUNDAI_LONG_TX_MSGS"),
+  "SCC11 allowlist": (safety, "{0x420, 0,       8, .check_relay = true}"),
+  "SCC12 allowlist": (safety, "{0x421, 0,       8, .check_relay = true}"),
+  "SCC13 allowlist": (safety, "{0x50A, 0,       8, .check_relay = true}"),
+  "SCC14 allowlist": (safety, "{0x389, 0,       8, .check_relay = true}"),
+  "tester present allowlist": (safety, "{0x7D0, 0, 8, .check_relay = false}"),
+  "exact tester present payload": (safety, "GET_BYTES(msg, 0, 4) != 0x00803E02U"),
+  "FCEV accelerator source": (safety_common, "HYUNDAI_PARAM_FCEV_GAS = 256"),
   "AI object state": (hyundaican, '"ObjValid": 1 if is_nexo'),
   "AI jerk lower": (hyundaican, '"JerkLowerLimit": 5.0 if is_nexo'),
-  "ownership tests": (tests, "class TestHyundaiNexoDynamicSCCOwnership"),
-  "rejected SCC test": (tests, "test_rejected_scc12_does_not_claim_ownership"),
-  "FCA pass-through test": (tests, "test_factory_fca_is_never_claimed"),
-  "neutral ownership test": (neutral_tests, "test_controls_off_allows_only_neutral_scc12_and_arms_ownership"),
-  "active mode blocked test": (neutral_tests, "test_controls_off_rejects_active_mode_even_with_zero_accel"),
-  "nonzero accel blocked test": (neutral_tests, "test_controls_off_rejects_nonzero_accel"),
+  "FCEV LONG test": (tests, "class TestHyundaiSafetyFCEVLong"),
+  "FCEV LONG test flags": (tests, "HyundaiSafetyFlags.FCEV_GAS | HyundaiSafetyFlags.LONG"),
+  "workflow FCEV LONG test": (workflow, "Test NEXO standard FCEV LONG safety"),
 }
 for name, (source, token) in required.items():
   if token not in source:
     raise SystemExit(f"missing {name}: {token}")
 
-# Guardrails: generic Hyundai and NEXO-specific SCC relay detection both remain
-# enabled. The post-radar source-0 verifier and card runtime guard are additional
-# fail-closed layers, not replacements for Panda relay protection.
+# NEXOdriveAI's proven runtime uses ordinary Hyundai LONG safety. The custom
+# dynamic-forwarding flag may remain in the source for historical comparison,
+# but the production NEXO interface must never select it.
+if "safetyParam |= HyundaiSafetyFlags.NEXO_DYNAMIC_SCC.value" in interface:
+  raise SystemExit("experimental NEXO dynamic SCC safety is still enabled")
+
+# Generic Hyundai longitudinal relay protection and pedal safety must remain
+# intact. The physical radar SCC is disabled over UDS and verified separately.
 normal_macro = safety.split("#define HYUNDAI_LONG_COMMON_TX_MSGS", 1)[1].split("#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[0]
-nexo_macro = safety.split("#define HYUNDAI_NEXO_LONG_COMMON_TX_MSGS", 1)[1].split("#define HYUNDAI_COMMON_RX_CHECKS", 1)[0]
 if "disable_static_blocking" in normal_macro:
   raise SystemExit("generic Hyundai longitudinal static forwarding was weakened")
 if ".check_relay = true" not in normal_macro:
   raise SystemExit("generic Hyundai relay protection was changed")
-for addr in ("0x420", "0x421", "0x50A", "0x389"):
-  if f"{{{addr}, 0,       8, .check_relay = true, .disable_static_blocking = true}}" not in nexo_macro:
-    raise SystemExit(f"NEXO SCC relay protection missing: {addr}")
 if "gas_pressed = brake_pressed = false" in safety:
   raise SystemExit("unsafe AI pedal bypass detected")
-if "is_fca_addr" in safety:
-  raise SystemExit("NEXO ownership must not claim stock FCA")
-print("NEXO AI SCC ownership, neutral handoff, relay protection, and compatibility checks passed")
+
+print("NEXO standard Hyundai LONG, FCEV pedal safety, SCC/Tester Present parity checks passed")
