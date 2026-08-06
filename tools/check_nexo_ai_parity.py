@@ -18,6 +18,8 @@ neutral_test_path = "opendbc_repo/opendbc/safety/tests/test_hyundai_nexo_neutral
 
 assert "ensure_nexo_stock_scc_silent" in interface
 assert 'RuntimeError("NEXO stock SCC remained active")' in interface
+assert "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable" in interface
+assert "alpha_long or is_nexo" not in interface
 assert "attempts: int = 3" in takeover
 assert "source0_scc_total" in takeover
 assert "disable_ecu" in takeover
@@ -29,6 +31,9 @@ assert "daemon_threads = True" in web
 assert "request_queue_size = 32" in web
 assert 'messaging.sub_sock("can"' in diagnostics
 assert 'messaging.sub_sock("sendcan"' in diagnostics
+assert "AlphaLongitudinalEnabled" in diagnostics
+assert "일반 크루즈 모드입니다" in diagnostics
+assert "ECU 중지·레이더 UDS·Tester Present를 실행하지 않습니다" in diagnostics
 assert "PubMaster" not in diagnostics
 assert "pub_sock" not in diagnostics
 assert "TestHyundaiNexoNeutralOwnership" in text(neutral_test_path)
@@ -39,6 +44,7 @@ assert "Test NEXO neutral SCC ownership" in workflow
 assert "test_hyundai_nexo_neutral_ownership" in workflow
 
 for path in (
+  "opendbc_repo/opendbc/car/hyundai/interface.py",
   "opendbc_repo/opendbc/car/hyundai/nexo_takeover.py",
   "system/nexo_web/nexo_ai_parity_diagnostics.py",
   "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_takeover.py",
@@ -46,4 +52,4 @@ for path in (
 ):
   ast.parse(text(path), filename=path)
 
-print("NEXO verified SCC takeover and AI parity diagnostics: OK")
+print("NEXO stock-cruise isolation and AI parity diagnostics: OK")
