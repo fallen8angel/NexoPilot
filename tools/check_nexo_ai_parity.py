@@ -20,6 +20,9 @@ assert "ensure_nexo_stock_scc_silent" in interface
 assert 'RuntimeError("NEXO stock SCC remained active")' in interface
 assert "ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable" in interface
 assert "alpha_long or is_nexo" not in interface
+assert "safetyParam |= HyundaiSafetyFlags.NEXO_DYNAMIC_SCC.value" not in interface
+assert "safetyParam |= HyundaiSafetyFlags.LONG.value" in interface
+assert "safetyParam |= HyundaiSafetyFlags.FCEV_GAS.value" in interface
 assert "attempts: int = 3" in takeover
 assert "source0_scc_total" in takeover
 assert "disable_ecu" in takeover
