@@ -6,7 +6,7 @@ interface = Path("opendbc_repo/opendbc/car/hyundai/interface.py").read_text()
 safety_common = Path("opendbc_repo/opendbc/safety/modes/hyundai_common.h").read_text()
 safety = Path("opendbc_repo/opendbc/safety/modes/hyundai.h").read_text()
 hyundaican = Path("opendbc_repo/opendbc/car/hyundai/hyundaican.py").read_text()
-tests = Path("opendbc_repo/opendbc/safety/tests/test_hyundai.py").read_text()
+standard_tests = Path("opendbc_repo/opendbc/safety/tests/test_hyundai_nexo_standard_long.py").read_text()
 workflow = Path(".github/workflows/nexo-validation.yml").read_text()
 
 required = {
@@ -25,9 +25,12 @@ required = {
   "FCEV accelerator source": (safety_common, "HYUNDAI_PARAM_FCEV_GAS = 256"),
   "AI object state": (hyundaican, '"ObjValid": 1 if is_nexo'),
   "AI jerk lower": (hyundaican, '"JerkLowerLimit": 5.0 if is_nexo'),
-  "FCEV LONG test": (tests, "class TestHyundaiSafetyFCEVLong"),
-  "FCEV LONG test flags": (tests, "HyundaiSafetyFlags.FCEV_GAS | HyundaiSafetyFlags.LONG"),
-  "workflow FCEV LONG test": (workflow, "Test NEXO standard FCEV LONG safety"),
+  "targeted standard LONG test": (standard_tests, "class TestHyundaiNexoStandardLong"),
+  "expected safetyParam test": (standard_tests, "self.assertEqual(int(self.PARAM), 260)"),
+  "tester present test": (standard_tests, "test_exact_tester_present_is_allowed"),
+  "acceleration limit test": (standard_tests, "test_scc12_keeps_normal_longitudinal_limits"),
+  "static SCC block test": (standard_tests, "test_standard_long_statically_blocks_camera_side_scc"),
+  "workflow FCEV LONG test": (workflow, "test_hyundai_nexo_standard_long"),
 }
 for name, (source, token) in required.items():
   if token not in source:
