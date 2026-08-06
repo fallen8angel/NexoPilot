@@ -43,6 +43,9 @@ jobs:
       - name: Check NEXO diagnostics
         run: python tools/check_nexo_diagnostics.py
 
+      - name: Check NEXO Panda fault-name diagnostics
+        run: python tools/check_nexo_panda_fault_diagnostics.py
+
       - name: Check NEXO verified SCC takeover and AI parity diagnostics
         run: python tools/check_nexo_ai_parity.py
 
