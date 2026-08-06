@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections import Counter, deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 
@@ -27,7 +27,7 @@ def _boot_id() -> str:
 
 
 def _write_guard_state(payload: dict[str, object]) -> None:
-  """Best-effort read-only diagnostics. Never affect guard decisions."""
+  """Best-effort diagnostics. Never affect guard decisions."""
   try:
     output = {
       "wall_time": time.time(),
@@ -42,12 +42,23 @@ def _write_guard_state(payload: dict[str, object]) -> None:
     pass
 
 
+def _iter_can_messages(items: Iterable[object]) -> Iterator[object]:
+  """Flatten both raw CAN batches and already-flat replay/test inputs."""
+  for item in items:
+    if hasattr(item, "address") and hasattr(item, "src"):
+      yield item
+    elif isinstance(item, Iterable) and not isinstance(item, (bytes, bytearray, memoryview, str)):
+      yield from _iter_can_messages(item)
+
+
 class NexoStockSccRuntimeGuard:
   """Fail closed when the factory SCC stream returns after radar takeover.
 
   Sources 128-191 are accepted Panda TX echoes and sources 192+ are safety
-  blocks. Only physical source 0 SCC11/12/13/14 can trip the guard. A rolling
-  five-second SCC/FCA/radar history is retained so the reason survives reboot.
+  blocks. Only physical source 0 SCC11/12/13/14 can trip the guard. card passes
+  CAN as a list of batches, so the guard explicitly flattens that shape before
+  inspecting source and address. A rolling five-second SCC/FCA/radar history is
+  retained so the reason survives process restart.
   """
 
   def __init__(self, enabled: bool, *, grace_s: float = NEXO_RUNTIME_GUARD_GRACE_S,
@@ -118,7 +129,7 @@ class NexoStockSccRuntimeGuard:
     timestamp = time.monotonic() if now is None else now
     grace_complete = timestamp - self.armed_at >= self.grace_s
 
-    for msg in can_messages:
+    for msg in _iter_can_messages(can_messages):
       source = int(getattr(msg, "src", -1))
       address = int(getattr(msg, "address", -1))
       if address in NEXO_STOCK_SCC_ADDRS or address in NEXO_FCA_ADDRS or address in NEXO_RADAR_TRACK_ADDRS:
@@ -128,8 +139,7 @@ class NexoStockSccRuntimeGuard:
           payload = ""
         self._recent_can.append((timestamp, source, address, payload))
 
-      if (grace_complete and getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE and
-          address in NEXO_STOCK_SCC_ADDRS):
+      if grace_complete and source == NEXO_STOCK_SCC_SOURCE and address in NEXO_STOCK_SCC_ADDRS:
         self._detections.append((timestamp, address))
 
     self._prune(timestamp)
