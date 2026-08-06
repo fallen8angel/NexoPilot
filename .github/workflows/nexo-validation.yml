@@ -66,7 +66,16 @@ jobs:
 
       - name: Test NEXO standard FCEV LONG safety
         working-directory: opendbc_repo
-        run: python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiSafetyFCEVLong
+        shell: bash
+        run: |
+          set +e
+          python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiSafetyFCEVLong 2>&1 | tee /tmp/nexo-fcev-long-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            details=$(tail -n 35 /tmp/nexo-fcev-long-test.log | tr '\n' '|' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=NEXO standard FCEV LONG safety::$details"
+            exit "$status"
+          fi
 
       - name: Test NEXO post-radar SCC silence verification
         working-directory: opendbc_repo
