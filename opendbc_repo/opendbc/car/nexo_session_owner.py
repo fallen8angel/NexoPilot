@@ -72,6 +72,12 @@ def claim_owner() -> str:
     return ""
 
 
+def current_process_owns() -> bool:
+  token = current_owner_token()
+  with owner_lock():
+    return read_owner_unlocked() == token
+
+
 def restore_allowed_unlocked(caller_token: str) -> tuple[bool, str]:
   owner = read_owner_unlocked()
   if not owner:
