@@ -110,12 +110,14 @@ def prepend_ai_parity_report(core, report: str) -> str:
   tester_accepted = int(live["tester_accepted"])
   tester_blocked = int(live["tester_blocked"])
 
+  stock_cruise = mode.get("openpilot_long") is not True and mode.get("pcm_cruise") is True
+
   if mode.get("car_params_available") is not True:
-    verdict = "[주행 금지] 현재 CarParams를 읽지 못해 NEXO 롱컨 상태를 확인할 수 없습니다."
+    verdict = "[주행 금지] 현재 CarParams를 읽지 못해 NEXO 제어 모드를 확인할 수 없습니다."
   elif mode.get("is_nexo") is not True:
     verdict = f"[주행 금지] 현재 차량 인식이 NEXO가 아닙니다: {mode.get('fingerprint')}"
-  elif mode.get("openpilot_long") is not True:
-    verdict = "[주행 금지] NexoPilot 롱컨이 비활성입니다. 현재 source0 SCC는 순정 복구 상태이며 AI 인계가 시작되지 않았습니다."
+  elif stock_cruise:
+    verdict = "[정상] 일반 크루즈 모드입니다. 순정 SCC가 보이는 것이 정상이며 AI 롱컨 인계 검사는 적용하지 않습니다."
   elif source0_scc:
     verdict = "[주행 금지] 롱컨 활성 상태에서 물리 source0 순정 SCC가 다시 관측됐습니다."
   elif not verified:
@@ -141,7 +143,8 @@ def prepend_ai_parity_report(core, report: str) -> str:
     f"source0_frames={last_attempt.get('source0_frames', '확인 불가')} source0_scc={last_attempt.get('source0_scc_total', '확인 불가')}",
     f"1.15초 실시간: source0 SCC={source0_scc}회 {live['source0_scc_counts']}",
     f"Tester Present(0x7D0): 요청={tester_requested} 통과={tester_accepted} 차단={tester_blocked}",
-    "※ 순정 크루즈 상태에서는 source0 SCC가 보이는 것이 정상입니다. AI 인계 평가는 openpilotLong=True일 때만 적용합니다.",
+    "※ 일반 크루즈에서는 순정 SCC와 pcmCruise=True가 정상입니다. ECU 중지·레이더 UDS·Tester Present를 실행하지 않습니다.",
+    "※ AI 롱컨 인계 평가는 openpilotLong=True일 때만 적용합니다.",
     "※ AI 실차 정상 기록에서는 takeover 이후 source0 SCC11/12/13/14가 사라지고 Panda 송신만 관측됐습니다.",
     "※ 이 검사는 읽기 전용입니다. 기존 8초 수집 뒤 1.15초 동안 CAN·sendcan을 추가로 구독합니다.",
     "※ 계기판 SCC·FCA·ADAS 경고등이 실제로 켜져 있으면 판정과 무관하게 주행하지 마세요.",
