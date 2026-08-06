@@ -214,10 +214,11 @@ class CarInterface(CarInterfaceBase):
       ret.startAccel = 1.0
       ret.longitudinalActuatorDelay = 0.5
 
+    # NEXOdriveAI succeeds with the normal Hyundai LONG safety path. Keep the
+    # NEXO FCEV pedal signal, but do not enable the experimental dynamic SCC
+    # forwarding mode that blocked SCC/Tester Present and overloaded CAN2.
     if ret.openpilotLongitudinalControl:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value
-      if is_nexo:
-        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.NEXO_DYNAMIC_SCC.value
     if ret.flags & HyundaiFlags.HYBRID:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.HYBRID_GAS.value
     elif ret.flags & HyundaiFlags.EV:
