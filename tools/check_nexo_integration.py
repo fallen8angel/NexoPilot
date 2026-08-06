@@ -219,7 +219,10 @@ def validate_runtime_guard() -> None:
     "NEXO_STOCK_SCC_ADDRS",
     "NEXO_STOCK_SCC_SOURCE = 0",
     "class NexoStockSccRuntimeGuard",
-    'getattr(msg, "src", -1) == NEXO_STOCK_SCC_SOURCE',
+    "def _iter_can_messages",
+    "for msg in _iter_can_messages(can_messages)",
+    'source = int(getattr(msg, "src", -1))',
+    "source == NEXO_STOCK_SCC_SOURCE",
     "len(self._detections) < self.min_frames",
     "def disarm(self)",
   )
