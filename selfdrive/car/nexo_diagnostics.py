@@ -24,6 +24,27 @@ def _param_text(params: Params, key: str) -> str:
     return ""
 
 
+def _enum_name(value) -> str:
+  text = str(value)
+  return text.rsplit(".", 1)[-1] if text else "확인 불가"
+
+
+def _panda_snapshot(panda, index: int) -> dict[str, object]:
+  try:
+    faults = sorted({_enum_name(fault) for fault in panda.faults})
+  except Exception:
+    faults = []
+  return {
+    "index": index,
+    "controls_allowed": bool(panda.controlsAllowed),
+    "safety_model": str(panda.safetyModel),
+    "safety_param": int(panda.safetyParam),
+    "safety_rx_checks_invalid": bool(panda.safetyRxChecksInvalid),
+    "fault_status": _enum_name(getattr(panda, "faultStatus", "확인 불가")),
+    "faults": [fault for fault in faults if fault not in ("none", "0", "확인 불가")],
+  }
+
+
 def record_nexo_fault_snapshot(params: Params, guard: NexoStockSccRuntimeGuard,
                                sm: messaging.SubMaster, error: Exception) -> None:
   """Persist the exact pre-reboot state without changing vehicle control."""
@@ -60,13 +81,10 @@ def record_nexo_fault_snapshot(params: Params, guard: NexoStockSccRuntimeGuard,
 
     try:
       pandas = sm["pandaStates"]
-      panda = pandas[0] if len(pandas) else None
-      payload["panda"] = None if panda is None else {
-        "controls_allowed": bool(panda.controlsAllowed),
-        "safety_model": str(panda.safetyModel),
-        "safety_param": int(panda.safetyParam),
-        "safety_rx_checks_invalid": bool(panda.safetyRxChecksInvalid),
-      }
+      panda_items = [_panda_snapshot(panda, index) for index, panda in enumerate(pandas)]
+      payload["pandas"] = panda_items
+      payload["panda"] = panda_items[0] if panda_items else None
+      payload["panda_faults"] = sorted({fault for item in panda_items for fault in item["faults"]})
     except Exception as state_error:
       payload["panda_error"] = str(state_error)
 
