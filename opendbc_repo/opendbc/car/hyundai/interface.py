@@ -14,6 +14,14 @@ from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.radar_interface import RadarInterface
+from opendbc.car.nexo_session_owner import (
+  clear_owner_if_current_unlocked,
+  current_owner_token,
+  current_process_owns,
+  owner_lock,
+  read_owner_unlocked,
+  restore_allowed_unlocked,
+)
 
 ButtonType = structs.CarState.ButtonEvent.Type
 Ecu = structs.CarParams.Ecu
@@ -63,37 +71,53 @@ def _clear_nexo_takeover_marker() -> None:
 
 def restore_nexo_stock_scc_communication(can_recv, can_send, *, bus: int = 0, addr: int = 0x7D0,
                                          reason: str = "", retries: int = 3) -> bool:
-  """Best-effort, idempotent restoration of factory SCC communication.
+  """Best-effort restoration without letting an old card process undo a newer takeover.
 
-  This never changes user settings and never requests a reboot. The persistent
-  marker is cleared only after an acknowledged 0x28 0x80 0x01 response.
+  The owner lock serializes restore against the final NEXO re-suppress/verify
+  step. An older process that exits after a newer card process has claimed SCC
+  ownership returns without sending 0x28 0x80 0x01 and without clearing the
+  newer process recovery marker.
   """
-  communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
-                                 0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
-                                 uds.MESSAGE_TYPE.NORMAL])
-  for attempt in range(1, retries + 1):
-    started = time.monotonic()
-    try:
-      restored = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
-      detail = ""
-    except Exception as error:
-      restored = False
-      detail = f" detail={type(error).__name__}: {error}"
-
-    message = (
-      f"RESTORE reason={reason or 'unspecified'} attempt={attempt}/{retries} ecu=0x{addr:X} bus={bus} "
-      f"acknowledged={restored} elapsed_ms={(time.monotonic() - started) * 1000:.1f}{detail}"
-    )
-    _trace_nexo_restore(message)
-    _trace_nexo_long_init(message)
-    if restored:
-      _clear_nexo_takeover_marker()
+  caller_token = current_owner_token()
+  with owner_lock():
+    allowed, owner_detail = restore_allowed_unlocked(caller_token)
+    if not allowed:
+      message = (
+        f"RESTORE SKIP reason={reason or 'unspecified'} caller={caller_token} "
+        f"detail={owner_detail}"
+      )
+      _trace_nexo_restore(message)
+      _trace_nexo_long_init(message)
       return True
-    if attempt < retries:
-      time.sleep(0.05)
 
-  _set_nexo_takeover_marker("restore_pending")
-  return False
+    communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
+                                   0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
+                                   uds.MESSAGE_TYPE.NORMAL])
+    for attempt in range(1, retries + 1):
+      started = time.monotonic()
+      try:
+        restored = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+        detail = ""
+      except Exception as error:
+        restored = False
+        detail = f" detail={type(error).__name__}: {error}"
+
+      message = (
+        f"RESTORE reason={reason or 'unspecified'} attempt={attempt}/{retries} ecu=0x{addr:X} bus={bus} "
+        f"owner={caller_token} ownerCheck={owner_detail} acknowledged={restored} "
+        f"elapsed_ms={(time.monotonic() - started) * 1000:.1f}{detail}"
+      )
+      _trace_nexo_restore(message)
+      _trace_nexo_long_init(message)
+      if restored:
+        _clear_nexo_takeover_marker()
+        clear_owner_if_current_unlocked(caller_token)
+        return True
+      if attempt < retries:
+        time.sleep(0.05)
+
+    _set_nexo_takeover_marker("restore_pending")
+    return False
 
 
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
@@ -303,16 +327,19 @@ class CarInterface(CarInterfaceBase):
                                    0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
                                    uds.MESSAGE_TYPE.NORMAL])
 
-    # NEXO restoration must only re-enable the factory SCC stream. Calling init()
-    # here would run the radar programming sequence again while handling a fault.
-    # A stale marker is honored even when the user has switched back to stock
-    # cruise so the next card start can repair an interrupted prior takeover.
-    if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and (
-        CP.openpilotLongitudinalControl or nexo_stock_scc_restore_pending()):
-      restored = restore_nexo_stock_scc_communication(
-        can_recv, can_send, bus=0, addr=0x7D0, reason="CarInterface.deinit",
-      )
-      _trace_nexo_long_init(f"DEINIT stock SCC communication restore acknowledged={restored}")
-      return restored
+    # NEXO deinit must not let an older card process restore SCC after a newer
+    # process has completed takeover. The ownership guard handles that race and
+    # stock mode also repairs stale owner/marker state from a dead process.
+    if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      owner_exists = bool(read_owner_unlocked())
+      if nexo_stock_scc_restore_pending() or owner_exists or current_process_owns():
+        restored = restore_nexo_stock_scc_communication(
+          can_recv, can_send, bus=0, addr=0x7D0, reason="CarInterface.deinit",
+        )
+        _trace_nexo_long_init(f"DEINIT stock SCC communication restore acknowledged={restored}")
+        return restored
+
+      _trace_nexo_long_init("DEINIT no active NEXO takeover; duplicate restore skipped")
+      return True
 
     CarInterface.init(CP, can_recv, can_send, communication_control)
