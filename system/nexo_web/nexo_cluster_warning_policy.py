@@ -5,6 +5,8 @@ _EXPECTED_PARK_EVENTS = (
   "onroadEvent wrongGear:",
   "onroadEvent seatbeltNotLatched:",
   "onroadEvent parkBrake:",
+  "onroadEvent wrongCarMode:",
+  "onroadEvent pcmDisable:",
 )
 
 
@@ -17,9 +19,11 @@ def _is_stationary_park(report: str) -> bool:
 def correct_stationary_cluster_warning(report: str) -> str:
   """Downgrade expected P/standstill entry-block events in the warning section.
 
-  wrongGear, seatbeltNotLatched and parkBrake are expected while a parked driver
-  runs diagnostics. They can block engagement, but they are not evidence of an
-  SCC/FCA/MDPS/ADAS cluster fault. This function only rewrites diagnostic text.
+  wrongGear, seatbeltNotLatched, parkBrake, wrongCarMode and pcmDisable can all
+  appear while a parked driver runs diagnostics with cruise/main control off.
+  They can block engagement, but in this P/0 km/h context they are not evidence
+  of an SCC/FCA/MDPS/ADAS cluster fault. This function only rewrites diagnostic
+  text and never changes vehicle state, Params, Panda safety, or CAN traffic.
   """
   if not _is_stationary_park(report):
     return report
@@ -41,6 +45,9 @@ def correct_stationary_cluster_warning(report: str) -> str:
     stripped = line.strip()
     if stripped.startswith("- 치명: ") and any(token in stripped for token in _EXPECTED_PARK_EVENTS):
       removed.append(stripped.removeprefix("- 치명: "))
+      continue
+    if stripped.startswith("- 주의: ") and any(token in stripped for token in _EXPECTED_PARK_EVENTS):
+      removed.append(stripped.removeprefix("- 주의: "))
       continue
     if stripped.startswith("- 치명: "):
       kept_critical = True
@@ -73,7 +80,7 @@ def correct_stationary_cluster_warning(report: str) -> str:
     "",
     "[P단 정지에서 정상으로 제외한 항목]",
     *(f"- 정보: {item}" for item in removed),
-    "- 설명: P단·정지·크루즈 비활성 진단에서는 기어·안전벨트·주차브레이크 진입 차단이 정상입니다.",
+    "- 설명: P단·정지·크루즈 비활성 진단에서는 기어·안전벨트·주차브레이크·크루즈 메인 OFF 관련 진입 차단이 정상입니다.",
     "",
   ]
   output[can_index:can_index] = insertion
