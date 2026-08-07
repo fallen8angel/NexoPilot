@@ -19,6 +19,16 @@ void fault_occurred(uint32_t fault) {
 void fault_recovered(uint32_t fault) {
   if ((PERMANENT_FAULTS & fault) == 0U) {
     faults &= ~fault;
+
+    // Keep the reported fault status in sync with the active fault bitmap.
+    // Transient IRQ-rate faults may recover after the bus has remained stable.
+    if (faults == 0U) {
+      fault_status = FAULT_STATUS_NONE;
+    } else if ((faults & PERMANENT_FAULTS) != 0U) {
+      fault_status = FAULT_STATUS_PERMANENT;
+    } else {
+      fault_status = FAULT_STATUS_TEMPORARY;
+    }
   } else {
     print("Cannot recover from a permanent fault!\n");
   }
