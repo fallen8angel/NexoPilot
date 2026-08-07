@@ -69,7 +69,8 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   warning_report = warning_diagnostics.prepend_cluster_warning_report(core, guard_report)
   stationary_corrected_report = warning_policy.correct_stationary_cluster_warning(warning_report)
   ai_report = ai_parity_diagnostics.prepend_ai_parity_report(core, stationary_corrected_report)
-  return panda_fault_diagnostics.prepend_panda_fault_report(ai_report)
+  final_report = panda_fault_diagnostics.prepend_panda_fault_report(ai_report)
+  return final_report.replace("\x00", "")
 
 
 def diagnostic_page(message: str = "") -> str:
