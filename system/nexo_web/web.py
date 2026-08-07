@@ -28,6 +28,7 @@ from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from cereal import car, messaging
 from openpilot.common.params import Params
 from system.nexo_web import nexo_cluster_warning_diagnostics as warning_diagnostics
 from system.nexo_web import nexo_cluster_warning_policy as warning_policy
@@ -96,14 +97,58 @@ core.live_page = live_page
 
 
 class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.7"
+  server_version = "NexoPilotWeb/7.8"
+
+  def _settings_gate(self) -> tuple[bool, str]:
+    """Allow ordinary web settings in Park without requiring the EPB.
+
+    This gate is intentionally narrower than the update/reboot gate: the car
+    must still be in P, fully stopped, with cruise and openpilot control off.
+    Missing state fails closed.
+    """
+    if not core.is_onroad():
+      return True, "오프로드"
+
+    try:
+      cs_sock = messaging.sub_sock("carState", conflate=True, timeout=900)
+      cs_msg = messaging.recv_one(cs_sock)
+      if cs_msg is None:
+        return False, "carState 수신 없음"
+      cs = cs_msg.carState
+      if cs.gearShifter != car.CarState.GearShifter.park:
+        return False, f"기어={carrot_ui._enum_name(cs.gearShifter)}"
+      if abs(float(cs.vEgo)) > 0.05:
+        return False, f"속도={float(cs.vEgo) * 3.6:.1f}km/h"
+      if bool(cs.cruiseState.enabled):
+        return False, "크루즈 활성 중"
+
+      ss_sock = messaging.sub_sock("selfdriveState", conflate=True, timeout=700)
+      ss_msg = messaging.recv_one(ss_sock)
+      if ss_msg is None:
+        return False, "selfdriveState 수신 없음"
+      if bool(ss_msg.selfdriveState.enabled) or bool(ss_msg.selfdriveState.active):
+        return False, "오픈파일럿 제어 활성 중"
+    except Exception as error:
+      return False, f"설정 가능 상태 확인 실패: {error}"
+
+    return True, "P + 0km/h + 크루즈/오픈파일럿 비활성"
 
   def _require_parked(self, path: str) -> bool:
+    allowed, state = self._settings_gate()
+    if allowed:
+      return True
+    self._redirect(
+      f"설정 변경은 P단·완전 정지·크루즈/오픈파일럿 비활성 상태에서 가능합니다. 현재 상태: {state}",
+      path,
+    )
+    return False
+
+  def _require_update_safe(self, path: str) -> bool:
     allowed, state = carrot_ui.stationary_gate(core)
     if allowed:
       return True
     self._redirect(
-      f"설정 변경은 P단·완전 정지·주차브레이크·크루즈/오픈파일럿 비활성 상태에서만 가능합니다. 현재 상태: {state}",
+      f"업데이트/재부팅은 P단·완전 정지·주차브레이크·크루즈/오픈파일럿 비활성 상태에서만 가능합니다. 현재 상태: {state}",
       path,
     )
     return False
@@ -156,9 +201,8 @@ class CarrotStyleHandler(_original_handler):
   def do_POST(self) -> None:
     parsed = urlparse(self.path)
 
-    # Updates alter executable vehicle code. Apply the same fail-closed gate as
-    # vehicle and longitudinal settings instead of the old P-only check.
-    if parsed.path == "/update" and not self._require_parked("/system"):
+    # Executable-code updates and reboot actions keep the stricter EPB gate.
+    if parsed.path in ("/update", "/settings/reboot") and not self._require_update_safe("/system" if parsed.path == "/update" else "/settings"):
       return
 
     if parsed.path == "/hud/toggle":
