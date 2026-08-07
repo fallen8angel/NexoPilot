@@ -145,8 +145,8 @@ static void tick_handler(void) {
       prev_harness_status = harness.status;
       can_set_orientation(harness.status == HARNESS_STATUS_FLIPPED);
 
-      // re-init everything that uses harness status
-      can_init_all();
+      // set_safety_mode() already reinitializes all CAN cores. Calling can_init_all()
+      // here as well caused back-to-back FDCAN resets during harness transitions.
       set_safety_mode(current_safety_mode, current_safety_param);
       set_power_save_state(power_save_enabled);
     }
