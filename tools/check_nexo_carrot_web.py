@@ -138,10 +138,16 @@ required_web = (
   "stationary_gate",
   "core.TOGGLES = list(carrot_ui.TOGGLES)",
   'server_version = "NexoPilotWeb/7.7"',
+  'Params().put("LongitudinalPersonality", personality)',
 )
 for token in required_web:
   if token not in web:
     raise SystemExit(f"Carrot-style web wiring missing token: {token}")
+
+# LongitudinalPersonality is registered as an INT Param. Passing str(...) used
+# to trigger params_pyx's runtime type checker on the live 7000 settings page.
+if 'Params().put("LongitudinalPersonality", str(personality))' in web:
+  raise SystemExit("LongitudinalPersonality must be written as INT, not str")
 
 # Every writable boolean item exposed by the web UI must be a registered Param.
 for key in (
@@ -175,4 +181,4 @@ for forbidden_action in (
   if forbidden_action in ui or forbidden_action in web or forbidden_action in remote or forbidden_action in hud:
     raise SystemExit(f"web UI must not modify/special-case Panda safety: {forbidden_action}")
 
-print("NEXO Carrot-style port 7000 UI PASS (12.8-inch read-only HUD + Remote placeholder included)")
+print("NEXO Carrot-style port 7000 UI PASS (typed personality + 12.8-inch read-only HUD + Remote placeholder included)")
