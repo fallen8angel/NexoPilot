@@ -55,6 +55,9 @@ jobs:
       - name: Check NEXO cruise-only driver monitoring and port 7000
         run: python tools/check_nexo_driver_monitoring.py
 
+      - name: Check NEXO Carrot-style port 7000 UI
+        run: python tools/check_nexo_carrot_web.py
+
       - name: Check NEXO UDS and failure policy
         run: python tools/check_nexo_uds_failure_policy.py
 
