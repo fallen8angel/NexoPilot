@@ -63,9 +63,9 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
-    # Preserve the latest complete stock SCC templates. NEXO keeps these
-    # cluster-facing messages alive during radar-track mode, and Carrot-style
-    # longitudinal control only overwrites the fields it owns.
+    # Stock-cruise compatibility templates. NEXO openpilot longitudinal builds
+    # complete SCC11/12/14 frames directly and must not register the silenced
+    # stock SCC stream as a CANParser alive requirement.
     self.scc11 = {}
     self.scc12 = {}
     self.scc14 = {}
@@ -205,7 +205,7 @@ class CarState(CarStateBase):
 
     self.lkas11 = copy.copy(cp_cam.vl["LKAS11"])
     self.clu11 = copy.copy(cp.vl["CLU11"])
-    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and not self.CP.openpilotLongitudinalControl:
       if cp_cruise.vl["SCC11"]:
         self.scc11 = copy.copy(cp_cruise.vl["SCC11"])
       if cp_cruise.vl["SCC12"]:
