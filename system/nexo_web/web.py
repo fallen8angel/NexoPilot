@@ -38,6 +38,7 @@ from system.nexo_web import nexo_panda_fault_diagnostics as panda_fault_diagnost
 from system.nexo_web import nexo_runtime_guard_diagnostics as guard_diagnostics
 from system.nexo_web import nexo_unified_diagnostics as unified_diagnostics
 from system.nexo_web import web_carrot_ui as carrot_ui
+from system.nexo_web import web_hud_ui as hud_ui
 from system.nexo_web import web_remote_ui as remote_ui
 from system.nexo_web import web_core as core
 from system.nexo_web import web_diagnostics_patch as diagnostics
@@ -129,11 +130,17 @@ class CarrotStyleHandler(_original_handler):
     if parsed.path == "/api/status":
       self._send_json(carrot_ui.status_json(core))
       return
+    if parsed.path == "/api/hud":
+      self._send_json(hud_ui.hud_status_json(core))
+      return
     if parsed.path == "/settings":
       self._send(carrot_ui.settings_page(core, message))
       return
     if parsed.path == "/system":
       self._send(carrot_ui.system_page(core, message, fetch_update=query.get("check", ["0"])[0] == "1"))
+      return
+    if parsed.path == "/hud":
+      self._send(hud_ui.hud_page(core, message))
       return
     if parsed.path == "/remote":
       self._send(remote_ui.remote_page(core))
@@ -149,6 +156,24 @@ class CarrotStyleHandler(_original_handler):
     # Updates alter executable vehicle code. Apply the same fail-closed gate as
     # vehicle and longitudinal settings instead of the old P-only check.
     if parsed.path == "/update" and not self._require_parked("/system"):
+      return
+
+    if parsed.path == "/hud/toggle":
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      if not self._require_parked("/hud"):
+        return
+      if self._read_small_form() is None:
+        return
+      params = Params()
+      next_value = not params.get_bool(hud_ui.HUD_PARAM)
+      try:
+        params.put_bool(hud_ui.HUD_PARAM, next_value)
+      except Exception as error:
+        self._redirect(f"HUD 설정 저장 실패: {error}", "/hud")
+        return
+      self._redirect("HUD를 활성화했습니다. 화면을 열어 표시 상태를 확인하세요." if next_value else "HUD를 비활성화했습니다.", "/hud")
       return
 
     if parsed.path == "/personality":
