@@ -14,7 +14,7 @@ V_CRUISE_UNSET = 255
 V_CRUISE_INITIAL = 40
 V_CRUISE_INITIAL_EXPERIMENTAL_MODE = 105
 NEXO_FINGERPRINT = "HYUNDAI_NEXO_1ST_GEN"
-NEXO_V_CRUISE_MIN = 10
+NEXO_V_CRUISE_MIN = 0
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)  # round here to avoid rounding errors incrementing set speed
 
 ButtonEvent = car.CarState.ButtonEvent
@@ -132,8 +132,8 @@ class VCruiseHelper:
     if self.CP.pcmCruise:
       return
 
-    # NEXO openpilot longitudinal can engage from 10 km/h. Do not force the
-    # generic 40 km/h initial set speed when SET is pressed at low speed.
+    # NEXO openpilot longitudinal can initialize its set speed from standstill.
+    # Keep the generic initial set speed for every other car unchanged.
     initial = self.v_cruise_min if self.is_nexo else (V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else V_CRUISE_INITIAL)
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
