@@ -163,13 +163,21 @@ def _category_count(counts: Counter[tuple[int, int]], addresses, low: int, high:
              if address in addresses and source >= low and (high is None or source < high))
 
 
+def _source_count(counts: Counter[tuple[int, int]], addresses, source: int) -> int:
+  return sum(count for (src, address), count in counts.items() if address in addresses and src == source)
+
+
+def _other_vehicle_count(counts: Counter[tuple[int, int]], addresses) -> int:
+  return sum(count for (source, address), count in counts.items() if address in addresses and 1 <= source < 128)
+
+
 def _flow_lines(requested: Counter[int], counts: Counter[tuple[int, int]]) -> list[str]:
-  lines = ["메시지        요청     성공     차단     차량수신"]
+  lines = ["메시지        요청     성공     차단   source0수신"]
   for address in (0x420, 0x421, 0x50A, 0x389, 0x38D, 0x483, 0x4A2):
     accepted = sum(count for (source, addr), count in counts.items() if addr == address and 128 <= source < 192)
     blocked = sum(count for (source, addr), count in counts.items() if addr == address and source >= 192)
-    vehicle = sum(count for (source, addr), count in counts.items() if addr == address and source < 128)
-    lines.append(f"{WATCHED[address]:12s} {requested[address]:7d} {accepted:8d} {blocked:8d} {vehicle:10d}")
+    source0 = sum(count for (source, addr), count in counts.items() if addr == address and source == 0)
+    lines.append(f"{WATCHED[address]:12s} {requested[address]:7d} {accepted:8d} {blocked:8d} {source0:12d}")
   return lines
 
 
@@ -228,22 +236,24 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
       timeline.append(f"{time.monotonic() - started:6.2f}s 상태 읽기 실패: {error}")
     time.sleep(0.01)
 
-  stock_scc = _category_count(counts, NEXO_SCC_ADDRS, 0, 128)
+  stock_scc = _source_count(counts, NEXO_SCC_ADDRS, 0)
+  other_scc = _other_vehicle_count(counts, NEXO_SCC_ADDRS)
   op_scc = _category_count(counts, NEXO_SCC_ADDRS, 128, 192)
   blocked_scc = _category_count(counts, NEXO_SCC_ADDRS, 192)
-  stock_fca = _category_count(counts, NEXO_FCA_ADDRS, 0, 128)
+  stock_fca = _source_count(counts, NEXO_FCA_ADDRS, 0)
+  other_fca = _other_vehicle_count(counts, NEXO_FCA_ADDRS)
   op_fca = _category_count(counts, NEXO_FCA_ADDRS, 128, 192)
   blocked_fca = _category_count(counts, NEXO_FCA_ADDRS, 192)
   radar_tracks = sum(count for (_, address), count in counts.items() if 0x500 <= address <= 0x51F and address != 0x50A)
 
   if stock_scc and op_scc:
-    verdict = "위험: 순정 SCC와 openpilot SCC가 동시에 관측됐습니다."
+    verdict = "위험: 물리 source0 순정 SCC와 openpilot SCC가 동시에 관측됐습니다."
   elif op_scc:
-    verdict = "정상 후보: openpilot SCC만 관측됐습니다. 순정 FCA 수신은 별도 정상 스트림입니다."
+    verdict = "정상 후보: 물리 source0 순정 SCC 없이 openpilot SCC가 관측됐습니다."
   elif stock_scc:
-    verdict = "순정 SCC만 관측됐습니다. openpilot 종방향 송신이 시작되지 않았습니다."
+    verdict = "물리 source0 순정 SCC만 관측됐습니다. openpilot 종방향 송신이 시작되지 않았습니다."
   else:
-    verdict = "SCC 송신을 관측하지 못했습니다."
+    verdict = "물리 source0 SCC와 openpilot SCC 송신을 관측하지 못했습니다."
 
   lines = [
     "NexoPilot NEXO 롱컨 블랙박스 v2",
@@ -253,9 +263,10 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     "", "[상태 변화]", *(timeline or ["상태 메시지를 수신하지 못했습니다."]),
     "", "[SCC/FCA 분리 자동 판정]",
     f"첫 accFault 전환: {first_acc_fault_at:.2f}초" if first_acc_fault_at is not None else "첫 accFault 전환: 관측되지 않음",
-    f"순정 SCC: {stock_scc} | openpilot SCC: {op_scc} | Panda 차단 SCC: {blocked_scc}",
-    f"순정 FCA: {stock_fca} | openpilot FCA: {op_fca} | Panda 차단 FCA: {blocked_fca}",
+    f"순정 SCC: {stock_scc} | 기타 버스 SCC: {other_scc} | openpilot SCC: {op_scc} | Panda 차단 SCC: {blocked_scc}",
+    f"순정 FCA: {stock_fca} | 기타 버스 FCA: {other_fca} | openpilot FCA: {op_fca} | Panda 차단 FCA: {blocked_fca}",
     f"레이더 트랙 프레임: {radar_tracks}", f"판정: {verdict}",
+    "※ '순정 SCC'는 물리 source0(src=0)만 의미합니다. src=1~127은 기타 버스로 분리합니다.",
     "", "[sendcan 요청 → Panda 결과]", *_flow_lines(requested, counts),
     "", "[SCC/FCA/레이더 CAN 집계]",
   ]
@@ -309,8 +320,9 @@ def raw_can_diagnostic_output(core) -> str:
 
   lines = [
     "1.5초 실제 CAN 및 sendcan 수집 결과",
-    f"SCC: 차량 {_category_count(counts, NEXO_SCC_ADDRS, 0, 128)} | 성공 {_category_count(counts, NEXO_SCC_ADDRS, 128, 192)} | 차단 {_category_count(counts, NEXO_SCC_ADDRS, 192)}",
-    f"FCA: 차량 {_category_count(counts, NEXO_FCA_ADDRS, 0, 128)} | 성공 {_category_count(counts, NEXO_FCA_ADDRS, 128, 192)} | 차단 {_category_count(counts, NEXO_FCA_ADDRS, 192)}",
+    f"SCC: source0 {_source_count(counts, NEXO_SCC_ADDRS, 0)} | 기타버스 {_other_vehicle_count(counts, NEXO_SCC_ADDRS)} | 성공 {_category_count(counts, NEXO_SCC_ADDRS, 128, 192)} | 차단 {_category_count(counts, NEXO_SCC_ADDRS, 192)}",
+    f"FCA: source0 {_source_count(counts, NEXO_FCA_ADDRS, 0)} | 기타버스 {_other_vehicle_count(counts, NEXO_FCA_ADDRS)} | 성공 {_category_count(counts, NEXO_FCA_ADDRS, 128, 192)} | 차단 {_category_count(counts, NEXO_FCA_ADDRS, 192)}",
+    "※ source0(src=0)만 순정 ECU 물리 버스 판정에 사용하며 src=1~127은 별도 버스 수신으로 표시합니다.",
     "※ 순정 FCA11/FCA12 수신은 정상이며 SCC 중복 제어 판정에 포함하지 않습니다.",
     "", "[sendcan 요청 → Panda 결과]", *_flow_lines(requested, counts), "",
   ]
