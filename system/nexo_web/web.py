@@ -38,6 +38,7 @@ from system.nexo_web import nexo_panda_fault_diagnostics as panda_fault_diagnost
 from system.nexo_web import nexo_runtime_guard_diagnostics as guard_diagnostics
 from system.nexo_web import nexo_unified_diagnostics as unified_diagnostics
 from system.nexo_web import web_carrot_ui as carrot_ui
+from system.nexo_web import web_remote_ui as remote_ui
 from system.nexo_web import web_core as core
 from system.nexo_web import web_diagnostics_patch as diagnostics
 
@@ -45,6 +46,7 @@ from system.nexo_web import web_diagnostics_patch as diagnostics
 _original_diagnostic_page = core.diagnostic_page
 _original_live_page = core.live_page
 _original_handler = core.Handler
+remote_ui.install(carrot_ui)
 
 
 def important_log_output() -> str:
@@ -93,7 +95,7 @@ core.live_page = live_page
 
 
 class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.7"
+  server_version = "NexoPilotWeb/7.8"
 
   def _require_parked(self, path: str) -> bool:
     allowed, state = carrot_ui.stationary_gate(core)
@@ -132,6 +134,9 @@ class CarrotStyleHandler(_original_handler):
       return
     if parsed.path == "/system":
       self._send(carrot_ui.system_page(core, message, fetch_update=query.get("check", ["0"])[0] == "1"))
+      return
+    if parsed.path == "/remote":
+      self._send(remote_ui.remote_page(core))
       return
     if parsed.path in ("/", "/index.html"):
       self._send(carrot_ui.dashboard_page(core, message, fetch_update=query.get("check", ["0"])[0] == "1"))
