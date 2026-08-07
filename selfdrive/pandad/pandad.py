@@ -5,6 +5,8 @@ import usb1
 import time
 import signal
 import subprocess
+import traceback
+from pathlib import Path
 
 from panda import Panda, PandaDFU, PandaProtocolMismatch, McuType, FW_PATH
 from openpilot.common.basedir import BASEDIR
@@ -12,10 +14,21 @@ from openpilot.common.params import Params
 from openpilot.system.hardware import HARDWARE
 from openpilot.common.swaglog import cloudlog
 
+PANDAD_ERROR_FILE = Path("/data/nexopilot/pandad_last_error.txt")
+
 
 def get_expected_signature() -> bytes:
   fn = os.path.join(FW_PATH, McuType.H7.config.app_fn)
   return Panda.get_signature_from_firmware(fn)
+
+
+def _record_pandad_error(label: str) -> None:
+  try:
+    PANDAD_ERROR_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PANDAD_ERROR_FILE.write_text(f"{label}\n{traceback.format_exc()}", encoding="utf-8")
+  except Exception:
+    pass
+
 
 def flash_panda(panda_serial: str):
   panda = Panda(panda_serial)
@@ -73,6 +86,7 @@ def main() -> None:
           Params().put_bool("PandaHeartbeatLost", True, block=True)
           cloudlog.event("heartbeat lost", deviceState=health)
   except Exception:
+    _record_pandad_error("startup health check")
     cloudlog.exception("pandad.uncaught_exception")
 
   count = 0
@@ -95,19 +109,37 @@ def main() -> None:
       if len(panda_serials):
         assert len(panda_serials) == 1
         cloudlog.info(f"{len(panda_serials)} panda found, connecting - {panda_serials}")
+
+        # This verifies the physical Panda signature against FW_PATH and flashes
+        # when needed. FW_PATH already selects the prepared NEXO firmware only
+        # when ready.json + both images are present.
         flash_panda(panda_serials[0])
 
-        # run real pandad
-        os.environ['MANAGER_DAEMON'] = 'pandad'
-        process = subprocess.Popen(["./pandad"], cwd=os.path.join(BASEDIR, "selfdrive/pandad"))
-        process.wait()
+        # Native pandad still compares against the repository prebuilt image,
+        # which is intentionally different from the separately prepared NEXO
+        # firmware. Skip only that redundant child-process check after the
+        # wrapper above has just verified the exact physical signature.
+        child_env = os.environ.copy()
+        child_env["MANAGER_DAEMON"] = "pandad"
+        child_env["BOARDD_SKIP_FW_CHECK"] = "1"
+        process = subprocess.Popen(["./pandad"], cwd=os.path.join(BASEDIR, "selfdrive/pandad"), env=child_env)
+        returncode = process.wait()
+        if returncode != 0 and not do_exit:
+          cloudlog.error(f"native pandad exited with returncode={returncode}")
+          try:
+            PANDAD_ERROR_FILE.parent.mkdir(parents=True, exist_ok=True)
+            PANDAD_ERROR_FILE.write_text(f"native pandad exited with returncode={returncode}\n", encoding="utf-8")
+          except Exception:
+            pass
     # TODO: wrap all panda exceptions in a base panda exception
     except (usb1.USBErrorNoDevice, usb1.USBErrorPipe):
-      # a panda was disconnected while setting everything up. let's try again
+      _record_pandad_error("Panda USB exception while setting up")
       cloudlog.exception("Panda USB exception while setting up")
     except PandaProtocolMismatch:
+      _record_pandad_error("pandad.protocol_mismatch")
       cloudlog.exception("pandad.protocol_mismatch")
     except Exception:
+      _record_pandad_error("pandad.uncaught_exception")
       cloudlog.exception("pandad.uncaught_exception")
 
 
