@@ -4,7 +4,24 @@ import hashlib
 from typing import NamedTuple
 
 BASEDIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../")
-FW_PATH = os.path.join(BASEDIR, "board/obj/")
+DEFAULT_FW_PATH = os.path.join(BASEDIR, "board/obj/")
+NEXO_FW_PATH = "/data/nexopilot/panda_fw/"
+NEXO_FW_READY = os.path.join(NEXO_FW_PATH, "ready.json")
+NEXO_FW_APP = os.path.join(NEXO_FW_PATH, "panda_h7.bin.signed")
+NEXO_FW_BOOTSTUB = os.path.join(NEXO_FW_PATH, "bootstub.panda_h7.bin")
+
+# NexoPilot can carry a prebuilt marker, which skips the normal source build.
+# Prefer the separately prepared firmware only when the boot-time verifier has
+# atomically published the ready marker and both required images exist. On any
+# preparation failure we fall back to the repository firmware; the boot-time
+# verifier simultaneously disables AlphaLongitudinalEnabled so stock cruise is
+# retained rather than using stale custom safety for longitudinal control.
+FW_PATH = NEXO_FW_PATH if (
+  os.path.isfile(NEXO_FW_READY)
+  and os.path.isfile(NEXO_FW_APP)
+  and os.path.isfile(NEXO_FW_BOOTSTUB)
+) else DEFAULT_FW_PATH
+
 
 def compute_version_hash(filepath):
   with open(filepath, "rb") as f:
