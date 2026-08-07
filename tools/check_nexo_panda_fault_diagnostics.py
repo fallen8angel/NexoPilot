@@ -21,11 +21,17 @@ for path, source in (
   ast.parse(source, filename=path)
 
 for token in (
-  "Panda fault 전용 진단",
+  "Panda fault·CAN IRQ·펌웨어 진단",
   "interruptRateCan2",
   "currentFaults",
   "observedFaults",
   "faultStatus",
+  "interruptLoad",
+  "irq0CallRate",
+  "irq1CallRate",
+  "sampleDeltas",
+  "Panda 펌웨어 출처",
+  "trackedRepoFirmwareVersion",
   "prepend_panda_fault_report",
   "Panda fault 기계 판독 JSON",
   "이 검사는 읽기 전용",
@@ -55,4 +61,4 @@ for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "s
   if forbidden in panda_diag:
     raise SystemExit(f"Panda fault diagnostics must remain read-only: {forbidden}")
 
-print("NEXO Panda fault-name diagnostics PASS")
+print("NEXO Panda fault/IRQ/firmware diagnostics PASS")
