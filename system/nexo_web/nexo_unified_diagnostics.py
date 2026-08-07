@@ -356,12 +356,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   if active and controls_allowed and blocked_scc:
     problems.append("실제 제어 활성 중 SCC Panda 차단 관측")
 
-  if card_running and carstate_alive and heartbeat_age is None:
-    warnings.append("heartbeat Params는 확인되지 않았지만 card 프로세스와 최신 carState로 card 실행은 확인됨")
+  # Missing legacy heartbeat Params is informational when the live card process
+  # and a fresh, valid carState already prove the card loop is healthy.
+  # Likewise, inactive stock/Panda SCC address traces are kept in the detailed
+  # flow output below but must not downgrade the overall result to [주의].
   if not active and blocked_scc:
     warnings.append("P단·크루즈 비활성 상태의 Panda 차단은 정상일 수 있음")
-  if stock_scc and op_scc and not active:
-    warnings.append("같은 주소의 차량 수신과 Panda 송신 흔적이 함께 보였지만 비활성 상태라 실제 동시 제어로 판정하지 않음")
   if long_enabled and not active and scc12["requested"] == 0:
     warnings.append("P단·크루즈 비활성 진단이라 SCC12 요청 0회는 정상일 수 있음")
   if long_enabled and radar_tracks == 0:
