@@ -46,6 +46,9 @@ jobs:
       - name: Check NEXO Panda fault-name diagnostics
         run: python tools/check_nexo_panda_fault_diagnostics.py
 
+      - name: Check NEXO Panda firmware freshness and fail-closed fallback
+        run: python tools/check_nexo_panda_firmware.py
+
       - name: Check NEXO verified SCC takeover and AI parity diagnostics
         run: python tools/check_nexo_ai_parity.py
 
