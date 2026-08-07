@@ -1,0 +1,48 @@
+name: NEXO Panda firmware build
+
+on:
+  push:
+    branches:
+      - NEXO
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexo-panda-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-panda-firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Panda build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+          python -m pip install --disable-pip-version-check scons pycryptodome
+
+      - name: Build Panda H7 firmware from checkout safety source
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          scons -C panda -j2 board/obj/panda_h7.bin.signed board/obj/bootstub.panda_h7.bin 2>&1 | tee /tmp/nexo-panda-build.log
+          test -s panda/board/obj/panda_h7.bin.signed
+          test -s panda/board/obj/bootstub.panda_h7.bin
+
+      - name: Show Panda firmware version
+        run: cat panda/board/obj/version
