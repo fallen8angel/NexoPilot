@@ -41,13 +41,19 @@ def main() -> None:
     "NexoCardSessionState": "CLEAR_ON_MANAGER_START | DONT_LOG, STRING",
     "NexoCardStage": "CLEAR_ON_MANAGER_START | DONT_LOG, STRING",
     "NexoLongitudinalFailure": "CLEAR_ON_MANAGER_START | DONT_LOG, STRING",
+    "AlphaLongitudinalEnabled": "PERSISTENT, BOOL",
+    "ExperimentalMode": "PERSISTENT, BOOL",
   }
   for key, flags in required_flags.items():
     token = f'{{"{key}", {{{flags}}}}}'
     if token not in source:
       raise AssertionError(f"NEXO Params key has wrong type/flags: {key}")
 
-  print(f"NEXO Params registry PASS ({len(used)} used keys registered)")
+  alpha_line = next((line for line in source.splitlines() if '"AlphaLongitudinalEnabled"' in line), "")
+  if "DEVELOPMENT_ONLY" in alpha_line:
+    raise AssertionError("AlphaLongitudinalEnabled must survive release-channel manager restart")
+
+  print(f"NEXO Params registry PASS ({len(used)} used keys registered; longitudinal settings persistent)")
 
 
 if __name__ == "__main__":
