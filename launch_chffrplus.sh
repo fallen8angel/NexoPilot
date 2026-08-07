@@ -75,6 +75,20 @@ function launch {
     agnos_init
   fi
 
+  # NexoPilot carries a prebuilt marker, so the normal manager build can be
+  # skipped even after Hyundai safety source changes. Prepare a Panda app and
+  # matching development bootstub from the current checkout before pandad is
+  # allowed to start. The verifier is a no-op outside the NEXO installation.
+  # On build failure it disables AlphaLongitudinalEnabled and permits stock
+  # cruise; if even that fail-closed fallback cannot be written, do not start.
+  if [ -f "$DIR/tools/nexo_panda_firmware.py" ]; then
+    echo "NexoPilot: verifying Panda firmware against current safety source"
+    if ! python3 "$DIR/tools/nexo_panda_firmware.py"; then
+      echo "NexoPilot: Panda firmware preparation failed and stock fallback could not be guaranteed"
+      exit 1
+    fi
+  fi
+
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
