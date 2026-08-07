@@ -12,13 +12,14 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+PANDA_ROOT = ROOT / "panda"
 STATE_DIR = Path("/data/nexopilot/panda_fw")
 READY_FILE = STATE_DIR / "ready.json"
 STATUS_FILE = STATE_DIR / "status.json"
 BUILD_LOG = STATE_DIR / "build.log"
 APP_NAME = "panda_h7.bin.signed"
 BOOTSTUB_NAME = "bootstub.panda_h7.bin"
-GENERATED_DIR = ROOT / "panda/board/obj"
+GENERATED_DIR = PANDA_ROOT / "board/obj"
 BUILD_APP = GENERATED_DIR / APP_NAME
 BUILD_BOOTSTUB = GENERATED_DIR / BOOTSTUB_NAME
 BUILD_VERSION = GENERATED_DIR / "version"
@@ -66,6 +67,7 @@ def _source_files() -> list[Path]:
       files.append(path)
 
   files.append(ROOT / "panda/SConscript")
+  files.append(ROOT / "panda/SConstruct")
   return sorted(set(files), key=lambda path: str(path.relative_to(ROOT)))
 
 
@@ -122,24 +124,45 @@ def _disable_longitudinal_after_build_failure(reason: str) -> bool:
     return False
 
 
+def _generated_tree_dirty() -> tuple[bool, str]:
+  result = _git("status", "--porcelain", "--", "panda/board/obj", timeout=30)
+  if result.returncode != 0:
+    return True, result.stderr.strip() or result.stdout.strip() or "cannot inspect Panda generated tree"
+  return bool(result.stdout.strip()), result.stdout.strip()
+
+
 def _restore_generated_tree() -> tuple[bool, str]:
-  result = _git("checkout", "--", "panda/board/obj", timeout=30)
-  if result.returncode == 0:
-    return True, ""
-  return False, (result.stderr.strip() or result.stdout.strip() or "git checkout failed")
+  restore = _git("checkout", "--", "panda/board/obj", timeout=30)
+  if restore.returncode != 0:
+    return False, restore.stderr.strip() or restore.stdout.strip() or "git checkout failed"
+
+  # The tree was verified clean before this script built anything, so any
+  # untracked files here were created by this build and can be removed safely.
+  clean = _git("clean", "-fd", "--", "panda/board/obj", timeout=30)
+  if clean.returncode != 0:
+    return False, clean.stderr.strip() or clean.stdout.strip() or "git clean failed"
+  return True, ""
 
 
-def _write_failure(expected_hash: str, reason: str, started: float) -> bool:
+def _build_tail(output: str) -> str:
+  return "\n".join(output.splitlines()[-40:])[-8000:]
+
+
+def _write_failure(expected_hash: str, reason: str, started: float, build_tail: str = "") -> bool:
   READY_FILE.unlink(missing_ok=True)
   stock_fallback = _disable_longitudinal_after_build_failure(reason)
-  _atomic_json(STATUS_FILE, {
+  payload: dict[str, object] = {
     "state": "failed",
     "sourceHash": expected_hash,
     "gitCommit": _git_value("rev-parse", "HEAD"),
     "reason": reason,
     "stockCruiseFallback": stock_fallback,
     "elapsedSec": round(time.monotonic() - started, 3),
-  })
+    "buildLog": str(BUILD_LOG),
+  }
+  if build_tail:
+    payload["buildTail"] = build_tail
+  _atomic_json(STATUS_FILE, payload)
   return stock_fallback
 
 
@@ -165,45 +188,50 @@ def ensure_firmware() -> bool:
 
   # Never overwrite a user's pre-existing generated-firmware edits. Generated
   # files produced by this function are restored before it returns.
-  dirty = _git("status", "--porcelain", "--", "panda/board/obj", timeout=30)
-  if dirty.returncode != 0:
-    reason = dirty.stderr.strip() or "cannot inspect Panda generated tree"
-    return _write_failure(expected_hash, reason, started)
-  if dirty.stdout.strip():
-    reason = "panda/board/obj contains pre-existing local changes; refusing to overwrite them"
+  dirty, dirty_detail = _generated_tree_dirty()
+  if dirty:
+    reason = dirty_detail or "panda/board/obj contains pre-existing local changes; refusing to overwrite them"
     return _write_failure(expected_hash, reason, started)
 
   READY_FILE.unlink(missing_ok=True)
+
+  # IMPORTANT: build with panda's standalone SConstruct. Using the repository
+  # root SConstruct unnecessarily loads the full openpilot native dependency
+  # graph and can fail on a prebuilt comma installation before the Panda build
+  # even begins. The standalone Panda build only needs SCons, the ARM toolchain,
+  # pycryptodome, and this checkout's opendbc safety headers.
   command = [
     "scons", "-j2",
-    "panda/board/obj/panda_h7.bin.signed",
-    "panda/board/obj/bootstub.panda_h7.bin",
+    "board/obj/panda_h7.bin.signed",
+    "board/obj/bootstub.panda_h7.bin",
   ]
 
   build_env = dict(os.environ)
-  build_env["PWD"] = str(ROOT)
+  build_env["PWD"] = str(PANDA_ROOT)
+  existing_pythonpath = build_env.get("PYTHONPATH", "")
+  build_env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing_pythonpath if existing_pythonpath else "")
   build_env.pop("RELEASE", None)  # build a matched development app + development bootstub
   build_env.pop("CERT", None)
 
   build_output = ""
   try:
-    result = subprocess.run(command, cwd=ROOT, env=build_env, text=True,
+    result = subprocess.run(command, cwd=PANDA_ROOT, env=build_env, text=True,
                             capture_output=True, timeout=900, check=False)
     build_output = (result.stdout + "\n" + result.stderr).strip()
     BUILD_LOG.write_text(build_output[-200000:], encoding="utf-8")
     if result.returncode != 0:
-      reason = f"Panda firmware build failed with exit {result.returncode}"
+      reason = f"Panda standalone firmware build failed with exit {result.returncode}"
       restored, restore_error = _restore_generated_tree()
       if not restored:
         reason += f"; generated-tree restore failed: {restore_error}"
-      return _write_failure(expected_hash, reason, started)
+      return _write_failure(expected_hash, reason, started, _build_tail(build_output))
 
     if not BUILD_APP.is_file() or not BUILD_BOOTSTUB.is_file():
-      reason = "Panda firmware build completed without required app/bootstub outputs"
+      reason = "Panda standalone firmware build completed without required app/bootstub outputs"
       restored, restore_error = _restore_generated_tree()
       if not restored:
         reason += f"; generated-tree restore failed: {restore_error}"
-      return _write_failure(expected_hash, reason, started)
+      return _write_failure(expected_hash, reason, started, _build_tail(build_output))
 
     version = BUILD_VERSION.read_text(encoding="utf-8", errors="replace").strip() if BUILD_VERSION.is_file() else "unknown"
     app_tmp = STATE_DIR / f"{APP_NAME}.tmp"
@@ -220,11 +248,11 @@ def ensure_firmware() -> bool:
     restored, restore_error = _restore_generated_tree()
     if not restored:
       reason += f"; generated-tree restore failed: {restore_error}"
-    return _write_failure(expected_hash, reason, started)
+    return _write_failure(expected_hash, reason, started, _build_tail(build_output))
 
   restored, restore_error = _restore_generated_tree()
   if not restored:
-    return _write_failure(expected_hash, f"generated-tree restore failed: {restore_error}", started)
+    return _write_failure(expected_hash, f"generated-tree restore failed: {restore_error}", started, _build_tail(build_output))
 
   ready = {
     "state": "ready",
@@ -234,6 +262,7 @@ def ensure_firmware() -> bool:
     "appSha256": app_sha,
     "bootstubSha256": bootstub_sha,
     "firmwarePath": str(STATE_DIR),
+    "buildMode": "panda-standalone",
     "stockCruiseFallback": False,
     "elapsedSec": round(time.monotonic() - started, 3),
   }
