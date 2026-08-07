@@ -242,7 +242,9 @@ class CarrotStyleHandler(_original_handler):
         self._send("지원하지 않는 주행 성향", HTTPStatus.BAD_REQUEST)
         return
       try:
-        Params().put("LongitudinalPersonality", str(personality))
+        # LongitudinalPersonality is a typed INT Param in this openpilot base.
+        # Passing str(personality) trips params_pyx's runtime type checker.
+        Params().put("LongitudinalPersonality", personality)
       except Exception as error:
         self._redirect(f"주행 성향 저장 실패: {error}", "/settings")
         return
