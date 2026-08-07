@@ -139,6 +139,9 @@ class CarrotStyleHandler(_original_handler):
     if parsed.path == "/system":
       self._send(carrot_ui.system_page(core, message, fetch_update=query.get("check", ["0"])[0] == "1"))
       return
+    if parsed.path == "/hud/view":
+      self._send(hud_ui.hud_view_page(core))
+      return
     if parsed.path == "/hud":
       self._send(hud_ui.hud_page(core, message))
       return
