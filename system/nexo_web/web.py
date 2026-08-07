@@ -95,7 +95,7 @@ core.live_page = live_page
 
 
 class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.8"
+  server_version = "NexoPilotWeb/7.7"
 
   def _require_parked(self, path: str) -> bool:
     allowed, state = carrot_ui.stationary_gate(core)
