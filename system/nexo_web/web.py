@@ -97,7 +97,7 @@ core.live_page = live_page
 
 
 class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.8"
+  server_version = "NexoPilotWeb/7.7"
 
   def _settings_gate(self) -> tuple[bool, str]:
     """Allow ordinary web settings in Park without requiring the EPB.
