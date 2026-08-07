@@ -94,6 +94,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LateralManeuverMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"LongitudinalManeuverMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"LongitudinalPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPersonality::STANDARD))}},
+    {"NexoHudEnabled", {PERSISTENT, BOOL, "0"}},
     {"NexoCardHeartbeatMono", {CLEAR_ON_MANAGER_START | DONT_LOG, FLOAT}},
     {"NexoCardLastCrash", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
     {"NexoCardSessionReason", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
