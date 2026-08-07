@@ -19,6 +19,7 @@ constants = read("panda/python/constants.py")
 launcher = read("launch_chffrplus.sh")
 pandad = read("selfdrive/pandad/pandad.py")
 panda_build = read("panda/SConscript")
+panda_sconstruct = read("panda/SConstruct")
 panda_main = read("panda/board/main.c")
 stm_config = read("panda/board/stm32h7/stm32h7_config.h")
 interface = read("opendbc_repo/opendbc/car/hyundai/interface.py")
@@ -31,17 +32,29 @@ for path, source in (
   ast.parse(source, filename=path)
 
 for token in (
+  'PANDA_ROOT = ROOT / "panda"',
   'STATE_DIR = Path("/data/nexopilot/panda_fw")',
   '"opendbc_repo/opendbc/safety"',
   '"panda/board"',
-  '"panda/board/obj/panda_h7.bin.signed"',
-  '"panda/board/obj/bootstub.panda_h7.bin"',
+  '"panda/SConstruct"',
+  '"board/obj/panda_h7.bin.signed"',
+  '"board/obj/bootstub.panda_h7.bin"',
+  'cwd=PANDA_ROOT',
+  'build_env["PYTHONPATH"]',
   'build_env.pop("RELEASE", None)',
   '_restore_generated_tree()',
+  '"clean", "-fd", "--", "panda/board/obj"',
   'put_bool("AlphaLongitudinalEnabled", False',
   'READY_FILE.unlink(missing_ok=True)',
+  '"buildTail"',
+  '"buildMode": "panda-standalone"',
 ):
   require(token in firmware, f"missing Panda freshness contract: {token}")
+
+require('cwd=ROOT' not in firmware[firmware.find('command = ['):firmware.find('def print_status')],
+        "Panda firmware build must not use the full repository root SConstruct")
+require('SConscript(\'SConscript\')' in panda_sconstruct,
+        "standalone Panda SConstruct must include Panda SConscript")
 
 for token in (
   'NEXO_FW_PATH = "/data/nexopilot/panda_fw/"',
@@ -73,7 +86,7 @@ require('#include "opendbc/safety/safety.h"' in panda_main,
 require("#define CAN_INTERRUPT_RATE 16000U" in stm_config,
         "do not mask interruptRateCan2 by changing the Panda interrupt threshold")
 
-# Keep the first physical-firmware correction on the already-tested standard
+# Keep the physical-firmware correction on the already-tested standard
 # Hyundai LONG + FCEV path. Do not silently resurrect the old 1284 experiment.
 require("ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.NEXO_DYNAMIC_SCC.value" not in interface,
         "NEXO_DYNAMIC_SCC must not be re-enabled while physical firmware provenance is under test")
@@ -82,4 +95,4 @@ require("ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.LONG.value" in 
 require("ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.FCEV_GAS.value" in interface,
         "NEXO FCEV pedal safety path missing")
 
-print("NEXO Panda firmware freshness/fail-closed path PASS")
+print("NEXO Panda standalone firmware freshness/fail-closed path PASS")
