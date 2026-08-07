@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
@@ -12,6 +13,34 @@ from opendbc.car.values import BRANDS
 from opendbc.car.vin import get_vin, is_valid_vin, VIN_UNKNOWN
 
 FRAME_FINGERPRINT = 100  # 1s
+NEXO_FINGERPRINT = "HYUNDAI_NEXO_1ST_GEN"
+NEXO_FORCE_FILE = Path("/data/nexopilot/force_nexo")
+# Strong NEXO signature copied from the proven vehicle capture. This is only
+# used after normal FW/CAN matching returns no candidate; extra CAN messages do
+# not invalidate the fallback the way a legacy exact fingerprint can.
+NEXO_CAN0_SIGNATURE = {
+  0x200: 6,
+  0x340: 8,
+  0x389: 8,
+  0x38D: 8,
+  0x420: 8,
+  0x421: 8,
+  0x483: 8,
+  0x4F1: 4,
+  0x50A: 8,
+}
+
+
+def _force_nexo_selected() -> bool:
+  try:
+    return NEXO_FORCE_FILE.read_text(encoding="utf-8").strip() == "1"
+  except (FileNotFoundError, OSError):
+    return False
+
+
+def _matches_nexo_signature(finger: dict[int, dict]) -> bool:
+  bus0 = finger.get(0, {})
+  return all(bus0.get(address) == length for address, length in NEXO_CAN0_SIGNATURE.items())
 
 
 def load_interfaces(brand_names):
@@ -84,6 +113,8 @@ def can_fingerprint(can_recv: CanRecvCallable) -> tuple[str | None, dict[int, di
 def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback,
                 cached_params: CarParamsT | None) -> tuple[str | None, dict, str, list[CarParams.CarFw], CarParams.FingerprintSource, bool]:
   fixed_fingerprint = os.environ.get('FINGERPRINT', "")
+  if not fixed_fingerprint and _force_nexo_selected():
+    fixed_fingerprint = NEXO_FINGERPRINT
   skip_fw_query = os.environ.get('SKIP_FW_QUERY', False)
   disable_fw_cache = os.environ.get('DISABLE_FW_CACHE', False)
   ecu_rx_addrs = set()
@@ -140,6 +171,14 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
   if fixed_fingerprint:
     car_fingerprint = fixed_fingerprint
     source = CarParams.FingerprintSource.fixed
+  elif car_fingerprint is None and _matches_nexo_signature(finger):
+    # The NEXO can carry additional normal messages that make the legacy exact
+    # fingerprint eliminate the platform. Only fall back after normal matching
+    # fails and the proven NEXO signature is present.
+    car_fingerprint = NEXO_FINGERPRINT
+    source = CarParams.FingerprintSource.can
+    exact_match = False
+    carlog.warning("NEXO CAN signature fallback selected %s", NEXO_FINGERPRINT)
 
   carlog.error({"event": "fingerprinted", "car_fingerprint": str(car_fingerprint), "source": source, "fuzzy": not exact_match,
                 "cached": cached, "fw_count": len(car_fw), "ecu_responses": list(ecu_rx_addrs), "vin_rx_addr": vin_rx_addr,
