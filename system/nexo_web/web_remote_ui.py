@@ -14,7 +14,7 @@ NAV_ITEMS = (
 
 
 def wide_nav_css() -> str:
-  """Keep phone/PC navigation at the bottom, but use a Carrot-style right rail on wide landscape displays."""
+  """Keep phone/PC navigation at the bottom, but use a Carrot-style left rail on wide landscape displays."""
   return """
 /* Six-item NexoPilot navigation. Narrow screens keep the bottom bar. */
 .nav{grid-template-columns:repeat(6,1fr)}
@@ -24,14 +24,14 @@ def wide_nav_css() -> str:
   main{
     box-sizing:border-box;
     max-width:calc(100% - 116px)!important;
-    margin:0 116px 0 0!important;
+    margin:0 0 0 116px!important;
     padding:18px 22px 18px 22px!important;
   }
   .nav{
     position:fixed!important;
     z-index:50;
-    left:auto!important;
-    right:10px!important;
+    left:10px!important;
+    right:auto!important;
     top:10px!important;
     bottom:10px!important;
     transform:none!important;
@@ -62,8 +62,8 @@ def wide_nav_css() -> str:
 
 /* Very wide, shallow automotive panels get slightly tighter rail buttons. */
 @media (min-width:1100px) and (max-height:650px) and (orientation:landscape){
-  .nav{width:86px!important;right:8px!important;top:8px!important;bottom:8px!important}
-  main{max-width:calc(100% - 106px)!important;margin-right:106px!important;padding:12px 16px!important}
+  .nav{width:86px!important;left:8px!important;right:auto!important;top:8px!important;bottom:8px!important}
+  main{max-width:calc(100% - 106px)!important;margin-left:106px!important;margin-right:0!important;padding:12px 16px!important}
   .nav a{font-size:12px!important;padding:5px 3px!important}
 }
 """
@@ -77,7 +77,7 @@ def nav(active: str) -> str:
 
 
 def install(carrot_ui) -> None:
-  """Extend navigation and add a responsive right-side rail without changing vehicle controls."""
+  """Extend navigation and add a responsive left-side rail without changing vehicle controls."""
   carrot_ui._nav = nav
   original_css = carrot_ui._css
 
