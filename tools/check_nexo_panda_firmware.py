@@ -76,8 +76,22 @@ for token in (
   "panda_signature != fw_signature",
   "panda.flash()",
   "HARDWARE.recover_internal_panda()",
+  'child_env["BOARDD_SKIP_FW_CHECK"] = "1"',
+  'subprocess.Popen(["./pandad"], cwd=os.path.join(BASEDIR, "selfdrive/pandad"), env=child_env)',
+  'PANDAD_ERROR_FILE = Path("/data/nexopilot/pandad_last_error.txt")',
 ):
-  require(token in pandad, f"standard Panda flash/recovery path missing: {token}")
+  require(token in pandad, f"standard/verified Panda handoff path missing: {token}")
+
+# The native firmware check currently only knows the repository prebuilt image.
+# Allow bypass only in the native child environment after flash_panda() returns,
+# which means the Python wrapper has just verified the exact physical signature.
+flash_pos = pandad.find("flash_panda(panda_serials[0])")
+skip_pos = pandad.find('child_env["BOARDD_SKIP_FW_CHECK"] = "1"')
+spawn_pos = pandad.find('subprocess.Popen(["./pandad"]')
+require(flash_pos >= 0 and skip_pos > flash_pos and spawn_pos > skip_pos,
+        "native Panda firmware check bypass must occur only after physical signature verification")
+require("os.environ['BOARDD_SKIP_FW_CHECK']" not in pandad and 'os.environ["BOARDD_SKIP_FW_CHECK"]' not in pandad,
+        "do not disable the native firmware check globally")
 
 require("opendbc.INCLUDE_PATH" in panda_build,
         "Panda firmware must compile against the checkout's opendbc safety headers")
