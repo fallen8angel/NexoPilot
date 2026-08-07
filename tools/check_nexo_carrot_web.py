@@ -61,6 +61,11 @@ required_hud = (
   "hud_status_json",
   "NEXO HUD",
   "HUD 활성화",
+  "HUD 설정",
+  "HUD 실시간 미리보기",
+  "기본 표시 항목",
+  "/hud/view",
+  "hud_view_page",
   "CAN 송신·Panda 설정·차량 제어는 하지 않습니다.",
   "전체화면",
 )
@@ -121,6 +126,8 @@ required_web = (
   "/api/status",
   'parsed.path == "/api/hud"',
   "hud_ui.hud_status_json(core)",
+  'parsed.path == "/hud/view"',
+  "hud_ui.hud_view_page(core)",
   'parsed.path == "/hud"',
   "hud_ui.hud_page(core, message)",
   'parsed.path == "/hud/toggle"',
@@ -168,4 +175,4 @@ for forbidden_action in (
   if forbidden_action in ui or forbidden_action in web or forbidden_action in remote or forbidden_action in hud:
     raise SystemExit(f"web UI must not modify/special-case Panda safety: {forbidden_action}")
 
-print("NEXO Carrot-style port 7000 UI PASS (read-only HUD + Remote placeholder included)")
+print("NEXO Carrot-style port 7000 UI PASS (12.8-inch read-only HUD + Remote placeholder included)")
