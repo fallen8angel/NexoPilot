@@ -54,18 +54,18 @@ def wide_nav_css() -> str:
     min-height:0!important;
     padding:7px 4px!important;
     border-radius:14px!important;
-    font-size:12px!important;
+    font-size:24px!important;
     line-height:1.15!important;
     text-align:center!important;
     white-space:nowrap!important;
   }
 }
 
-/* Very wide, shallow automotive panels get slightly tighter rail buttons. */
+/* Very wide, shallow automotive panels keep the same doubled label scale. */
 @media (min-width:1100px) and (max-height:650px) and (orientation:landscape){
   .nav{width:86px!important;left:8px!important;right:auto!important;top:8px!important;bottom:8px!important;gap:4px!important}
   main{max-width:calc(100% - 106px)!important;margin-left:106px!important;margin-right:0!important;padding:12px 16px!important}
-  .nav a{font-size:11px!important;padding:4px 3px!important}
+  .nav a{font-size:22px!important;padding:4px 3px!important}
 }
 """
 
