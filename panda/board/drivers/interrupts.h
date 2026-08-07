@@ -14,6 +14,13 @@ static uint32_t idle_time = 0U;
 static uint32_t busy_time = 0U;
 float interrupt_load = 0.0f;
 
+// CAN IRQ rate faults are temporary. Keep the normal Panda rate limit intact, but
+// allow a latched transient (for example during CAN/harness initialization) to
+// recover only after both IRQ lines for that FDCAN core have remained below the
+// limit for several complete one-second windows.
+#define CAN_INTERRUPT_RECOVERY_WINDOWS 3U
+static uint8_t can_interrupt_recovery_windows[PANDA_CAN_CNT] = {0U, 0U, 0U};
+
 void handle_interrupt(IRQn_Type irq_type){
   static uint8_t interrupt_depth = 0U;
   static uint32_t last_time = 0U;
@@ -56,6 +63,39 @@ void interrupt_timer_handler(void) {
       // Reset interrupt counters
       interrupts[i].call_rate = interrupts[i].call_counter;
       interrupts[i].call_counter = 0U;
+    }
+
+    if (check_interrupt_rate) {
+      const IRQn_Type can_irq[PANDA_CAN_CNT][2] = {
+        {FDCAN1_IT0_IRQn, FDCAN1_IT1_IRQn},
+        {FDCAN2_IT0_IRQn, FDCAN2_IT1_IRQn},
+        {FDCAN3_IT0_IRQn, FDCAN3_IT1_IRQn},
+      };
+      const uint32_t can_fault[PANDA_CAN_CNT] = {
+        FAULT_INTERRUPT_RATE_CAN_1,
+        FAULT_INTERRUPT_RATE_CAN_2,
+        FAULT_INTERRUPT_RATE_CAN_3,
+      };
+
+      for (uint8_t can_number = 0U; can_number < PANDA_CAN_CNT; can_number++) {
+        const bool irq0_ok = interrupts[can_irq[can_number][0]].call_rate <= interrupts[can_irq[can_number][0]].max_call_rate;
+        const bool irq1_ok = interrupts[can_irq[can_number][1]].call_rate <= interrupts[can_irq[can_number][1]].max_call_rate;
+        const bool fault_active = (faults & can_fault[can_number]) != 0U;
+
+        if (fault_active && irq0_ok && irq1_ok) {
+          if (can_interrupt_recovery_windows[can_number] < CAN_INTERRUPT_RECOVERY_WINDOWS) {
+            can_interrupt_recovery_windows[can_number] += 1U;
+          }
+          if (can_interrupt_recovery_windows[can_number] >= CAN_INTERRUPT_RECOVERY_WINDOWS) {
+            fault_recovered(can_fault[can_number]);
+            can_interrupt_recovery_windows[can_number] = 0U;
+          }
+        } else {
+          // Any new overload immediately cancels the recovery streak. The
+          // original fault remains latched until a fresh stable window streak.
+          can_interrupt_recovery_windows[can_number] = 0U;
+        }
+      }
     }
 
     // Calculate interrupt load
