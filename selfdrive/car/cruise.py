@@ -13,6 +13,8 @@ V_CRUISE_MAX = 145
 V_CRUISE_UNSET = 255
 V_CRUISE_INITIAL = 40
 V_CRUISE_INITIAL_EXPERIMENTAL_MODE = 105
+NEXO_FINGERPRINT = "HYUNDAI_NEXO_1ST_GEN"
+NEXO_V_CRUISE_MIN = 10
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)  # round here to avoid rounding errors incrementing set speed
 
 ButtonEvent = car.CarState.ButtonEvent
@@ -31,6 +33,8 @@ CRUISE_INTERVAL_SIGN = {
 class VCruiseHelper:
   def __init__(self, CP):
     self.CP = CP
+    self.is_nexo = str(CP.carFingerprint) == NEXO_FINGERPRINT
+    self.v_cruise_min = NEXO_V_CRUISE_MIN if self.is_nexo else V_CRUISE_MIN
     self.v_cruise_kph = V_CRUISE_UNSET
     self.v_cruise_cluster_kph = V_CRUISE_UNSET
     self.v_cruise_kph_last = 0
@@ -109,7 +113,7 @@ class VCruiseHelper:
     if CS.gasPressed and button_type in (ButtonType.decelCruise, ButtonType.setCruise):
       self.v_cruise_kph = max(self.v_cruise_kph, CS.vEgo * CV.MS_TO_KPH)
 
-    self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX)
+    self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
   def update_button_timers(self, CS, enabled):
     # increment timer for buttons still pressed
@@ -128,7 +132,9 @@ class VCruiseHelper:
     if self.CP.pcmCruise:
       return
 
-    initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else V_CRUISE_INITIAL
+    # NEXO openpilot longitudinal can engage from 10 km/h. Do not force the
+    # generic 40 km/h initial set speed when SET is pressed at low speed.
+    initial = self.v_cruise_min if self.is_nexo else (V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else V_CRUISE_INITIAL)
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
