@@ -95,6 +95,22 @@ def _counter_deltas(first: dict[str, object], latest: dict[str, object], elapsed
   return result
 
 
+def _panda_counter_deltas(first: dict[str, object], latest: dict[str, object]) -> dict[str, int]:
+  """Return only growth observed during this sample window.
+
+  Panda buffer-overflow and safety counters are lifetime/cumulative values. A
+  large absolute value alone does not prove that the fault is happening now.
+  """
+  counters = ("rxBufferOverflow", "txBufferOverflow", "safetyTxBlocked", "safetyRxInvalid")
+  result: dict[str, int] = {}
+  for field in counters:
+    start = first.get(field)
+    end = latest.get(field)
+    if isinstance(start, int) and isinstance(end, int):
+      result[field] = max(0, end - start)
+  return result
+
+
 def _firmware_status() -> dict[str, object]:
   result: dict[str, object] = {
     "readyMarker": PANDA_FW_READY.is_file(),
@@ -143,6 +159,7 @@ def _sample_panda_faults(duration_s: float = 1.5) -> dict[str, object]:
     index = int(item["index"])
     item["observedFaults"] = sorted(observed_by_panda.get(index, set()))
     first = first_by_panda.get(index, {})
+    item["sampleDeltas"] = _panda_counter_deltas(first, item) if isinstance(first, dict) else {}
     first_can = first.get("canStates", []) if isinstance(first, dict) else []
     latest_can = item.get("canStates", [])
     if isinstance(first_can, list) and isinstance(latest_can, list):
@@ -181,6 +198,8 @@ def prepend_panda_fault_report(report: str) -> str:
   observed = snapshot["observedFaults"] if isinstance(snapshot.get("observedFaults"), list) else []
   current = sorted({fault for item in pandas for fault in item.get("currentFaults", [])})
   rx_invalid = any(item.get("rxChecksInvalid") is True for item in pandas)
+  rx_overflow_growth = sum(int(item.get("sampleDeltas", {}).get("rxBufferOverflow", 0)) for item in pandas)
+  tx_overflow_growth = sum(int(item.get("sampleDeltas", {}).get("txBufferOverflow", 0)) for item in pandas)
 
   if snapshot.get("seen") is not True:
     verdict = "[주행 금지] pandaStates를 수신하지 못해 Panda fault 상태를 확인할 수 없습니다."
@@ -188,6 +207,8 @@ def prepend_panda_fault_report(report: str) -> str:
     verdict = f"[주행 금지] Panda fault 감지: {', '.join(observed)}"
   elif rx_invalid:
     verdict = "[주행 금지] Panda RX 안전검사가 invalid 상태입니다."
+  elif rx_overflow_growth or tx_overflow_growth:
+    verdict = f"[주의] 검사 중 Panda buffer overflow 증가 RX/TX={rx_overflow_growth}/{tx_overflow_growth}"
   else:
     verdict = "[정상 후보] 활성 Panda fault가 없고 RX 안전검사가 정상입니다."
 
@@ -205,12 +226,17 @@ def prepend_panda_fault_report(report: str) -> str:
 
   if pandas:
     for item in pandas:
+      panda_deltas = item.get("sampleDeltas", {}) if isinstance(item.get("sampleDeltas"), dict) else {}
       lines.append(
         f"Panda {item['index']}: safety={item['safetyModel']}({item['safetyParam']}) | "
         f"controlsAllowed={item['controlsAllowed']} | rxInvalid={item['rxChecksInvalid']} | "
         f"faultStatus={item['faultStatus']} | interruptLoad={item['interruptLoad']} | "
         f"safetyTxBlocked={item['safetyTxBlocked']} | currentFaults={item['currentFaults']} | "
         f"observedFaults={item['observedFaults']}"
+      )
+      lines.append(
+        f"  buffer overflow 누적 RX/TX={item.get('rxBufferOverflow', '확인 불가')}/{item.get('txBufferOverflow', '확인 불가')} | "
+        f"1.5초 증가 RX/TX={panda_deltas.get('rxBufferOverflow', '확인 불가')}/{panda_deltas.get('txBufferOverflow', '확인 불가')}"
       )
       for can_state in item.get("canStates", []):
         if not isinstance(can_state, dict):
@@ -241,8 +267,11 @@ def prepend_panda_fault_report(report: str) -> str:
 
   if "interruptRateCan2" in observed:
     lines.append("[핵심] interruptRateCan2가 확인됐습니다. Panda의 FDCAN2 인터럽트 fault이며 위 CAN core 1의 irq/error/rate 값을 함께 확인하세요. fault를 숨기거나 임계값을 올리지 않습니다.")
+  if rx_overflow_growth or tx_overflow_growth:
+    lines.append("[주의] buffer overflow 누적 총값이 아니라 이번 1.5초 검사 중 실제 증가가 확인됐습니다. CAN 부하와 pandad 소비 지연을 함께 확인하세요.")
 
   lines.extend([
+    "※ buffer overflow 절대값은 Panda 부팅 이후 누적값입니다. 현재 문제 여부는 1.5초 증가량(delta)을 우선해서 봅니다.",
     "※ fault 이름은 모든 Panda에서 모아 표시하며 순간적으로 나타났다 사라진 fault도 1.5초 관측 목록에 남깁니다.",
     "※ CAN core의 RX/TX/FWD delta는 이 1.5초 표본 안의 증가량이며 물리 버스 번호와 FDCAN core 번호는 하네스 방향에 따라 구분해서 봅니다.",
     "※ 이 검사는 읽기 전용이며 Panda 설정 변경·CAN 송신·fault 해제를 수행하지 않습니다.",
