@@ -171,15 +171,23 @@ def _carparams_snapshot(core) -> dict[str, object]:
 def _service_snapshot() -> dict[str, dict[str, object]]:
   services = ["carState", "selfdriveState", "pandaStates", "radarState", *COMM_SERVICES]
   result: dict[str, dict[str, object]] = {
-    name: {"seen": False, "alive": False, "valid": False, "ageMs": None} for name in services
+    name: {"seen": False, "alive": False, "valid": False, "freqOk": False, "sampleCount": 0, "ageMs": None}
+    for name in services
   }
   try:
     sm = messaging.SubMaster(services)
+    sample_counts = dict.fromkeys(services, 0)
+
+    # Carrot/selfdrived keeps one SubMaster alive continuously, so FrequencyTracker
+    # has multiple receive intervals before all_checks() is trusted. Mirror that
+    # behavior here: observe the full warm-up window instead of exiting after the
+    # first message from every service. freqOk is not meaningful after one sample.
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
       sm.update(100)
-      if all(sm.seen[name] for name in services):
-        break
+      for name in services:
+        if sm.updated[name]:
+          sample_counts[name] += 1
 
     now_ns = time.monotonic_ns()
     for name in services:
@@ -190,6 +198,7 @@ def _service_snapshot() -> dict[str, dict[str, object]]:
         "alive": bool(sm.alive[name]),
         "valid": bool(sm.valid[name]),
         "freqOk": bool(sm.freq_ok[name]),
+        "sampleCount": int(sample_counts[name]),
         "ageMs": age_ms,
       }
 
@@ -230,7 +239,8 @@ def _service_snapshot() -> dict[str, dict[str, object]]:
     })
   except Exception as error:
     result["snapshotError"] = {
-      "seen": False, "alive": False, "valid": False, "ageMs": None, "error": str(error),
+      "seen": False, "alive": False, "valid": False, "freqOk": False, "sampleCount": 0,
+      "ageMs": None, "error": str(error),
     }
   return result
 
@@ -285,10 +295,14 @@ def _live_comm_status(services: dict[str, dict[str, object]]) -> tuple[bool, lis
   bad: list[str] = []
   for name in COMM_SERVICES:
     info = services.get(name, {})
-    if info.get("seen") is not True or info.get("alive") is not True or info.get("valid") is not True or info.get("freqOk") is not True:
+    sample_count = int(info.get("sampleCount") or 0)
+    basic_ok = info.get("seen") is True and info.get("alive") is True and info.get("valid") is True
+    freq_ready = sample_count >= 2
+    freq_ok = info.get("freqOk") is True
+    if not basic_ok or not freq_ready or not freq_ok:
       bad.append(
         f"{name}(seen={info.get('seen')}, alive={info.get('alive')}, valid={info.get('valid')}, "
-        f"freqOk={info.get('freqOk')}, age={info.get('ageMs')}ms)"
+        f"freqOk={info.get('freqOk')}, samples={sample_count}, age={info.get('ageMs')}ms)"
       )
   return not bad, bad
 
@@ -407,7 +421,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   radar_status = _label("정상" if radar_tracks > 0 and not radar_error else "주의", f"tracks={radar_tracks}, errors={{{', '.join(f'{k}={radar_info.get(k)}' for k in ('canError', 'radarFault', 'wrongConfig', 'unavailableTemporary'))}}}")
   panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
   restore_status = _label("실패" if marker.get("problem") else "정상", str(marker.get("description")))
-  comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk" if live_comm_ok else "; ".join(live_comm_bad))
+  comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk (2초 warm-up 완료)" if live_comm_ok else "; ".join(live_comm_bad))
 
   safety_configs = cp.get("safetyConfigs") or []
   safety_text = ", ".join(f"{item['model']}({item['param']})" for item in safety_configs) or "없음"
@@ -446,6 +460,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     f"레이더 트랙={radar_tracks} | UDS 순정SCC중지 후보={uds_suppress_ok} | 레이더설정 후보={radar_init_ok}",
     "※ controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상일 수 있습니다.",
     "※ 같은 주소가 여러 src에 보여도 버스·방향·차단 상태가 달라 실제 동시 제어를 뜻하지 않습니다.",
+    "※ 통신 주파수는 당근/selfdrived처럼 충분한 수신 간격이 쌓인 뒤 판정합니다.",
     "※ 과거 commIssue 로그는 현재 핵심 서비스가 모두 정상일 때 첫 오류에서 제외합니다.",
     "",
     f"[핵심 프로세스] {process_text}",
