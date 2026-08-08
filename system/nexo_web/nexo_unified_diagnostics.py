@@ -20,6 +20,7 @@ PROCESS_PATTERNS = {
   "nexo_web": ("system.nexo_web.web", "nexo_web/web.py"),
 }
 FLOW_NAMES = ("SCC11", "SCC12", "SCC13", "SCC14", "FCA11", "FCA12", "FRT_RADAR11")
+COMM_SERVICES = ("driverMonitoringState", "longitudinalPlan", "driverAssistance")
 REAL_ERROR = re.compile(
   r"(unknownkeyname|traceback|exception|fatal|bus off|relay malfunction|commissue|"
   r"radar[^\n]*(?:fault|error|unavailable)|safety[^\n]*(?:invalid|fault|violation)|"
@@ -168,13 +169,13 @@ def _carparams_snapshot(core) -> dict[str, object]:
 
 
 def _service_snapshot() -> dict[str, dict[str, object]]:
-  services = ["carState", "selfdriveState", "pandaStates", "radarState"]
+  services = ["carState", "selfdriveState", "pandaStates", "radarState", *COMM_SERVICES]
   result: dict[str, dict[str, object]] = {
     name: {"seen": False, "alive": False, "valid": False, "ageMs": None} for name in services
   }
   try:
     sm = messaging.SubMaster(services)
-    deadline = time.monotonic() + 1.5
+    deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
       sm.update(100)
       if all(sm.seen[name] for name in services):
@@ -188,6 +189,7 @@ def _service_snapshot() -> dict[str, dict[str, object]]:
         "seen": bool(sm.seen[name]),
         "alive": bool(sm.alive[name]),
         "valid": bool(sm.valid[name]),
+        "freqOk": bool(sm.freq_ok[name]),
         "ageMs": age_ms,
       }
 
@@ -264,7 +266,7 @@ def _flow_snapshot(report: str) -> dict[str, dict[str, int]]:
   return flow
 
 
-def _first_real_error(parts: Iterable[str]) -> str:
+def _first_real_error(parts: Iterable[str], ignore_comm_issue: bool = False) -> str:
   for part in parts:
     for raw_line in part.splitlines():
       line = re.sub(r"\s+", " ", raw_line).strip()
@@ -273,8 +275,22 @@ def _first_real_error(parts: Iterable[str]) -> str:
       lowered = line.lower().replace(" ", "")
       if '"error":false' in lowered or "error=false" in lowered:
         continue
+      if ignore_comm_issue and "commissue" in lowered:
+        continue
       return line[:220]
   return "없음"
+
+
+def _live_comm_status(services: dict[str, dict[str, object]]) -> tuple[bool, list[str]]:
+  bad: list[str] = []
+  for name in COMM_SERVICES:
+    info = services.get(name, {})
+    if info.get("seen") is not True or info.get("alive") is not True or info.get("valid") is not True or info.get("freqOk") is not True:
+      bad.append(
+        f"{name}(seen={info.get('seen')}, alive={info.get('alive')}, valid={info.get('valid')}, "
+        f"freqOk={info.get('freqOk')}, age={info.get('ageMs')}ms)"
+      )
+  return not bad, bad
 
 
 def _label(level: str, detail: str) -> str:
@@ -312,6 +328,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   card_running = bool(processes.get("card", {}).get("running"))
   heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= 3.0
   card_healthy = card_running and (heartbeat_fresh or carstate_alive)
+  live_comm_ok, live_comm_bad = _live_comm_status(services)
 
   restore_log = _read_tail(NEXO_SCC_RESTORE_LOG)
   restore_ack = "acknowledged=True" in restore_log
@@ -328,7 +345,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   crash_section = _section(report, "마지막 card crash traceback")
   error_section = _section(report, "핵심 오류 로그")
   current_crash = bool(crash_section and "현재 버전 기록 후보" in crash_section and "저장된 card Python crash" not in crash_section)
-  first_error = _first_real_error((runtime_section, init_section, current_crash and crash_section or "", error_section))
+  first_error = _first_real_error(
+    (runtime_section, init_section, current_crash and crash_section or "", error_section),
+    ignore_comm_issue=live_comm_ok,
+  )
+  if not live_comm_ok:
+    first_error = "현재 commIssue: " + "; ".join(live_comm_bad)[:190]
 
   uds_suppress_ok = "acknowledged=True" in init_section or "completed=True" in init_section
   radar_init_ok = "radar-track request completed=True" in init_section or ("RADAR ATTEMPT" in init_section and "completed" in init_section)
@@ -355,6 +377,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     problems.append("Panda RX 안전검사 invalid")
   if active and controls_allowed and blocked_scc:
     problems.append("실제 제어 활성 중 SCC Panda 차단 관측")
+  if not live_comm_ok:
+    warnings.append("현재 핵심 서비스 통신 이상: " + "; ".join(live_comm_bad))
 
   # Missing legacy heartbeat Params is informational when the live card process
   # and a fresh, valid carState already prove the card loop is healthy.
@@ -383,6 +407,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   radar_status = _label("정상" if radar_tracks > 0 and not radar_error else "주의", f"tracks={radar_tracks}, errors={{{', '.join(f'{k}={radar_info.get(k)}' for k in ('canError', 'radarFault', 'wrongConfig', 'unavailableTemporary'))}}}")
   panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
   restore_status = _label("실패" if marker.get("problem") else "정상", str(marker.get("description")))
+  comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk" if live_comm_ok else "; ".join(live_comm_bad))
 
   safety_configs = cp.get("safetyConfigs") or []
   safety_text = ", ".join(f"{item['model']}({item['param']})" for item in safety_configs) or "없음"
@@ -405,7 +430,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     f"4. 레이더    : {radar_status}",
     f"5. Panda     : {panda_status}",
     f"6. 순정 복구 : {restore_status}",
-    f"7. 첫 오류   : {first_error}",
+    f"7. 현재 통신 : {comm_status}",
+    f"8. 첫 오류   : {first_error}",
     "",
     "[차량·제어 설정]",
     f"Git={core.git_value('rev-parse', '--short', 'HEAD')} | Branch={core.git_value('rev-parse', '--abbrev-ref', 'HEAD')} | Dirty={core.git_value('status', '--porcelain') != ''}",
@@ -420,6 +446,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     f"레이더 트랙={radar_tracks} | UDS 순정SCC중지 후보={uds_suppress_ok} | 레이더설정 후보={radar_init_ok}",
     "※ controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상일 수 있습니다.",
     "※ 같은 주소가 여러 src에 보여도 버스·방향·차단 상태가 달라 실제 동시 제어를 뜻하지 않습니다.",
+    "※ 과거 commIssue 로그는 현재 핵심 서비스가 모두 정상일 때 첫 오류에서 제외합니다.",
     "",
     f"[핵심 프로세스] {process_text}",
     f"[takeover 마커] stage={marker.get('stage')} raw={marker.get('raw') or '없음'}",
@@ -439,6 +466,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     "carParams": cp,
     "processes": processes,
     "services": services,
+    "liveCommOk": live_comm_ok,
+    "liveCommProblems": live_comm_bad,
     "flow": flow,
     "counts": {
       "stockScc": stock_scc,
