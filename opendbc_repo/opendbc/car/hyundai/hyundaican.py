@@ -122,7 +122,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   lead_distance = max(0.0, min(float(hud_control.leadDistance), 204.7)) if lead_visible else 0.0
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
-  obj_dist_stat = 0 if obj_gap == 0 else 2 if lead_rel_speed < -0.2 else 1
 
   scc11_values = {
     "MainMode_ACC": 1 if main_mode_acc else 0,
@@ -165,7 +164,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "JerkLowerLimit": 5.0 if is_nexo else upper_jerk,
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": obj_gap,
-    "ObjDistStat": obj_dist_stat,
   }
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
