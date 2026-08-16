@@ -23,7 +23,7 @@ required = {
   "tester present allowlist": (safety, "{0x7D0, 0, 8, .check_relay = false}"),
   "exact tester present payload": (safety, "GET_BYTES(msg, 0, 4) != 0x00803E02U"),
   "FCEV accelerator source": (safety_common, "HYUNDAI_PARAM_FCEV_GAS = 256"),
-  "AI object state": (hyundaican, '"ObjValid": 1 if is_nexo'),
+  "radar object follows lead visibility": (hyundaican, '"ObjValid": 1 if lead_visible else 0'),
   "AI jerk lower": (hyundaican, '"JerkLowerLimit": 5.0 if is_nexo'),
   "targeted standard LONG test": (standard_tests, "class TestHyundaiNexoStandardLong"),
   "expected safetyParam test": (standard_tests, "self.assertEqual(int(self.PARAM), 260)"),
