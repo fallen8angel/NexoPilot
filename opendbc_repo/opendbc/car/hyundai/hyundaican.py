@@ -122,6 +122,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   lead_distance = max(0.0, min(float(hud_control.leadDistance), 204.7)) if lead_visible else 0.0
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
+  obj_dist_stat = 0 if obj_gap == 0 else 2 if lead_rel_speed < -0.2 else 1
 
   scc11_values = {
     "MainMode_ACC": 1 if main_mode_acc else 0,
@@ -129,8 +130,8 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "VSetDis": set_speed if acc_enabled else 0,
     "AliveCounterACC": idx % 0x10,
     "SCCInfoDisplay": 0,
-    "ObjValid": 1 if is_nexo else 1 if lead_visible else 0,
-    "ACC_ObjStatus": 1 if is_nexo else 1 if lead_visible else 0,
+    "ObjValid": 1 if lead_visible else 0,
+    "ACC_ObjStatus": 1 if lead_visible else 0,
     "ACC_ObjLatPos": 0,
     "ACC_ObjRelSpd": lead_rel_speed,
     "ACC_ObjDist": lead_distance,
@@ -164,12 +165,14 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "JerkLowerLimit": 5.0 if is_nexo else upper_jerk,
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": obj_gap,
+    "ObjDistStat": obj_dist_stat,
   }
   commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
 
-  # NEXO keeps its stock FCA stream alive. Do not inject a second FCA11 status
-  # frame with AEB-disabled values while the factory FCA ECU is still present.
-  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # XPlus keeps the FCA status stream present after radar/SCC suppression.
+  # Mirror that behavior when FCA11 exists on this car instead of relying on
+  # the muted factory stream to keep the cluster/FCA state alive.
+  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
@@ -185,7 +188,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
-  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -194,8 +196,9 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # Preserve the factory NEXO FCA12 settings instead of advertising AEB off.
-  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # XPlus also advertises the FCA user/status option while stock SCC/FCA
+  # communication is suppressed. Keep the same 5 Hz option stream on NEXO.
+  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
       "FCA_USM": 1,
