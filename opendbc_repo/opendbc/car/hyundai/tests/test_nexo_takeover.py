@@ -74,6 +74,22 @@ class TestNexoTakeoverVerification(unittest.TestCase):
     self.assertFalse(result)
     self.assertIn('"state": "failed"', self.state_path.read_text(encoding="utf-8"))
 
+  def test_fails_closed_when_source0_fca11_remains(self):
+    recv = self._receiver([(0x200, 0), (0x38D, 0), (0x251, 0)])
+    with patch.object(nexo_takeover, "NEXO_TAKEOVER_VERIFY_LOG", self.state_path), \
+         patch.object(nexo_takeover, "claim_owner", return_value="123:456"), \
+         patch.object(nexo_takeover, "_wait_for_exclusive_card_process", return_value=(True, [], 0.0)), \
+         patch.object(nexo_takeover, "disable_ecu", return_value=True):
+      result = nexo_takeover.ensure_nexo_stock_scc_silent(
+        recv, self.can_send, bus=0, addr=0x7D0, communication_control=b"\x28\x83\x01",
+        trace=lambda _: None, attempts=1, sample_s=0.01, settle_s=0.0, min_source0_frames=1,
+        exclusive_wait_s=0.0, stability_observation_s=0.0,
+      )
+    self.assertFalse(result)
+    state = self.state_path.read_text(encoding="utf-8")
+    self.assertIn('"state": "failed"', state)
+    self.assertIn("0x38D", state)
+
   def test_fails_closed_when_takeover_owner_cannot_be_claimed(self):
     recv = self._receiver([(0x200, 0), (0x251, 0), (0x386, 0)])
     with patch.object(nexo_takeover, "NEXO_TAKEOVER_VERIFY_LOG", self.state_path), \
