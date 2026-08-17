@@ -59,10 +59,16 @@ def record_nexo_fault_snapshot(params: Params, guard: NexoStockSccRuntimeGuard,
 
     try:
       control = sm["carControl"]
+      actuators = control.actuators
       payload["car_control"] = {
         "enabled": bool(control.enabled),
         "lat_active": bool(control.latActive),
         "long_active": bool(control.longActive),
+        "requested_accel": float(actuators.accel),
+        "long_control_state": _enum_name(actuators.longControlState),
+        "cruise_cancel": bool(control.cruiseControl.cancel),
+        "cruise_resume": bool(control.cruiseControl.resume),
+        "cruise_override": bool(control.cruiseControl.override),
       }
     except Exception as state_error:
       payload["car_control_error"] = str(state_error)
@@ -96,6 +102,14 @@ def record_nexo_fault_snapshot(params: Params, guard: NexoStockSccRuntimeGuard,
         "radar_fault": bool(errors.radarFault),
         "wrong_config": bool(errors.wrongConfig),
         "temporary_unavailable": bool(errors.radarUnavailableTemporary),
+      }
+      lead = radar.leadOne
+      payload["radar_lead_one"] = {
+        "status": bool(lead.status),
+        "d_rel_m": float(lead.dRel),
+        "v_rel_mps": float(lead.vRel),
+        "a_rel_mps2": float(lead.aRel),
+        "v_lead_mps": float(lead.vLead),
       }
     except Exception as state_error:
       payload["radar_state_error"] = str(state_error)
