@@ -122,6 +122,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   lead_distance = max(0.0, min(float(hud_control.leadDistance), 204.7)) if lead_visible else 0.0
   lead_rel_speed = max(-170.0, min(float(hud_control.leadRelSpeed), 239.5)) if lead_visible else 0.0
   obj_gap = 0 if not lead_visible else 2 if lead_distance < 25 else 3 if lead_distance < 40 else 4 if lead_distance < 70 else 5
+  obj_dist_stat = 0 if not lead_visible else 2 if lead_rel_speed < -0.2 else 1
 
   scc11_values = {
     "MainMode_ACC": 1 if main_mode_acc else 0,
@@ -165,7 +166,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "ACCMode": 2 if scc14_enabled and long_override else 1 if scc14_enabled else 4,
     "ObjGap": obj_gap,
   }
-  commands.append(packer.make_can_msg("SCC14", 0, scc14_values))
+  scc14 = packer.make_can_msg("SCC14", 0, scc14_values)
+  if is_nexo:
+    # XPlus' generic Hyundai DBC exposes ObjDistStat at SCC14 bits 42..43,
+    # while NexoPilot's generated DBC currently omits the signal. Set those
+    # two payload bits directly for NEXO without replacing the generated DBC.
+    scc14_dat = bytearray(scc14[1])
+    scc14_dat[5] = (scc14_dat[5] & 0xF3) | ((obj_dist_stat & 0x3) << 2)
+    scc14 = (scc14[0], bytes(scc14_dat), scc14[2])
+  commands.append(scc14)
 
   # XPlus keeps the FCA status stream present after radar/SCC suppression.
   # Mirror that behavior when FCA11 exists on this car instead of relying on
@@ -175,7 +184,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 1,
+      "FCA_Status": 0 if is_nexo else 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
