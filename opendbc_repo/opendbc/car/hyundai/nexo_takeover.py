@@ -12,7 +12,10 @@ from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.nexo_session_owner import claim_owner
 
 
-NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x420, 0x421, 0x50A))
+# Physical source-0 longitudinal streams that must be silent before openpilot
+# takes ownership. XPlus' verified NEXO takeover also replaces FCA11 (0x38D),
+# so letting a stock FCA11 survive can create a duplicate FCA/SCC status stream.
+NEXO_STOCK_SCC_ADDRS = frozenset((0x389, 0x38D, 0x420, 0x421, 0x50A))
 NEXO_TAKEOVER_VERIFY_LOG = Path("/data/nexo_scc_takeover_verification.json")
 NEXO_CARD_CMDLINE_MARKERS = (b"selfdrive.car.card", b"selfdrive/car/card.py")
 
