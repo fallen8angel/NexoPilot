@@ -1,4 +1,8 @@
 from dataclasses import dataclass
+from pathlib import Path
+
+
+NEXO_SCC_TAKEOVER_MARKER = Path("/data/nexo_scc_takeover_active")
 
 
 @dataclass(frozen=True)
@@ -10,13 +14,26 @@ class NexoAccFaultDecision:
   healthy_seen: bool
 
 
+def _nexo_takeover_active() -> bool:
+  try:
+    return NEXO_SCC_TAKEOVER_MARKER.exists()
+  except OSError:
+    # Fail safe for the NEXO takeover path: if marker state cannot be read,
+    # do not promote ACCEnable alone to a longitudinal fault.
+    return True
+
+
 class NexoAccFaultQualifier:
   """Qualify the NEXO TCS13.ACCEnable fault without hiding real faults.
 
   NEXO can briefly report a non-zero ACCEnable while the longitudinal takeover
-  is starting. A bounded grace is allowed only until the first healthy
-  ACCEnable==0 sample is observed. A fault that survives the grace, or any
-  fault that appears after a healthy sample, is reported immediately.
+  is starting. Before takeover, a bounded grace is allowed only until the first
+  healthy ACCEnable==0 sample is observed.
+
+  Once the stock SCC takeover marker is active, ACCEnable is no longer a
+  trustworthy fault source because silencing the factory SCC changes this
+  signal on NEXO. During that state ACCEnable alone is ignored. Qualification
+  automatically resumes when the takeover marker is no longer active.
   """
 
   def __init__(self, startup_grace_s: float = 2.0):
@@ -24,9 +41,15 @@ class NexoAccFaultQualifier:
     self.healthy_seen = False
     self.first_raw_fault_at: float | None = None
 
-  def update(self, raw_fault: bool, now: float) -> NexoAccFaultDecision:
+  def update(self, raw_fault: bool, now: float, *, takeover_active: bool | None = None) -> NexoAccFaultDecision:
     raw_fault = bool(raw_fault)
     now = float(now)
+    if takeover_active is None:
+      takeover_active = _nexo_takeover_active()
+
+    if takeover_active:
+      self.first_raw_fault_at = None
+      return NexoAccFaultDecision(raw_fault, False, "signal_untrusted_takeover", 0.0, self.healthy_seen)
 
     if not raw_fault:
       self.healthy_seen = True
