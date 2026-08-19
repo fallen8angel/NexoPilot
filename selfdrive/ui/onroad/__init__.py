@@ -47,8 +47,8 @@ def _patch_opkr_blind_spot(module) -> None:
       line_max_distance = min(max_distance, float(line[-1, 0]))
       max_idx = self._get_path_length_idx(line[:, 0], line_max_distance)
 
-      # OPKR_NEXO fills 2.8 m outward from each ego-lane boundary.
-      # A 1.4 m center shift plus 1.4 m half-width reproduces that area.
+      # Model-space +Y points to the vehicle's right. Fill 2.8 m outward
+      # from each ego-lane boundary instead of inward across the ego lane.
       shifted = line.copy()
       shifted[:, 1] += center_shift
       points = self._map_line_to_polygon(
@@ -63,9 +63,9 @@ def _patch_opkr_blind_spot(module) -> None:
         module.draw_polygon(self._rect, points, warn_color)
 
     if left_blind_spot:
-      draw_area(1, 1.4)
+      draw_area(1, -1.4)
     if right_blind_spot:
-      draw_area(2, -1.4)
+      draw_area(2, 1.4)
 
   ModelRenderer._render = _render
   ModelRenderer._nexo_opkr_blind_spot_patched = True
