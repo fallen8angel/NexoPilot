@@ -97,6 +97,10 @@ jobs:
         working-directory: opendbc_repo
         run: python -m unittest opendbc.car.hyundai.tests.test_nexo_fingerprint
 
+      - name: Test NEXO ACC startup fault qualification
+        working-directory: opendbc_repo
+        run: python -m unittest opendbc.car.hyundai.tests.test_nexo_acc_fault
+
       - name: Test NEXO stock SCC crash recovery
         working-directory: opendbc_repo
         run: python -m unittest opendbc.car.hyundai.tests.test_nexo_init

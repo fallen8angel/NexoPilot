@@ -9,10 +9,11 @@ from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlag
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.hyundai.radar_tracks import enable_radar_tracks
 from opendbc.car.hyundai.nexo_takeover import ensure_nexo_stock_scc_silent
+from opendbc.car.hyundai.nexo_acc_fault import NexoAccFaultQualifier
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
-from opendbc.car.hyundai.carcontroller import CarController
-from opendbc.car.hyundai.carstate import CarState
+from opendbc.car.hyundai.carcontroller import CarController as HyundaiCarController
+from opendbc.car.hyundai.carstate import CarState as HyundaiCarState
 from opendbc.car.hyundai.radar_interface import RadarInterface
 from opendbc.car.nexo_session_owner import (
   clear_owner_if_current_unlocked,
@@ -28,6 +29,7 @@ Ecu = structs.CarParams.Ecu
 NEXO_LONG_INIT_LOG = "/data/nexo_long_init.log"
 NEXO_SCC_TAKEOVER_MARKER = Path("/data/nexo_scc_takeover_active")
 NEXO_SCC_RESTORE_LOG = Path("/data/nexo_scc_restore.log")
+NEXO_ACC_FAULT_STARTUP_GRACE_S = 2.0
 
 
 def _trace_nexo_long_init(message: str, reset: bool = False) -> None:
@@ -120,12 +122,89 @@ def restore_nexo_stock_scc_communication(can_recv, can_send, *, bus: int = 0, ad
     return False
 
 
+class NexoQualifiedCarState(HyundaiCarState):
+  """NEXO-only final ACC fault qualification while leaving stock cruise untouched."""
+
+  def __init__(self, CP):
+    super().__init__(CP)
+    self._nexo_acc_fault = NexoAccFaultQualifier(NEXO_ACC_FAULT_STARTUP_GRACE_S)
+    self._nexo_acc_last_trace = None
+
+  def update(self, can_parsers):
+    ret = super().update(can_parsers)
+    if self.CP.carFingerprint != CAR.HYUNDAI_NEXO_1ST_GEN or not self.CP.openpilotLongitudinalControl:
+      return ret
+
+    raw_acc_enable = int(can_parsers[Bus.pt].vl["TCS13"]["ACCEnable"])
+    decision = self._nexo_acc_fault.update(raw_acc_enable != 0, time.monotonic())
+    ret.accFaulted = decision.qualified_fault
+
+    trace_state = (raw_acc_enable, decision.qualified_fault, decision.reason, decision.healthy_seen)
+    if trace_state != self._nexo_acc_last_trace:
+      _trace_nexo_long_init(
+        "ACCFAULT source=TCS13.ACCEnable code=NexoQualifiedCarState.update "
+        f"raw={raw_acc_enable} rawFault={decision.raw_fault} qualified={decision.qualified_fault} "
+        f"reason={decision.reason} rawDuration={decision.raw_fault_duration_s:.3f}s "
+        f"healthySeen={decision.healthy_seen} grace={NEXO_ACC_FAULT_STARTUP_GRACE_S:.1f}s"
+      )
+      self._nexo_acc_last_trace = trace_state
+    return ret
+
+
+class NexoTracingCarController(HyundaiCarController):
+  """Read-only NEXO longitudinal state trace; actuation remains in the base controller."""
+
+  def __init__(self, dbc_names, CP):
+    super().__init__(dbc_names, CP)
+    self._nexo_control_last = None
+
+  def update(self, CC, CS, now_nanos):
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl:
+      if CC.longActive:
+        mode = "SPEED_CONTROL"
+      elif CC.latActive:
+        mode = "MED_WAIT"
+      else:
+        mode = "OFF"
+
+      button_events = []
+      try:
+        for event in CS.out.buttonEvents:
+          button_events.append(f"{event.type}:{'down' if event.pressed else 'up'}")
+      except Exception:
+        pass
+
+      blockers = []
+      if not CC.enabled:
+        blockers.append("CC.enabled=False")
+      if not CC.longActive:
+        blockers.append("CC.longActive=False")
+      if not self.CP.openpilotLongitudinalControl:
+        blockers.append("openpilotLongitudinalControl=False")
+
+      snapshot = (
+        mode, bool(CC.enabled), bool(CC.latActive), bool(CC.longActive),
+        bool(CS.out.cruiseState.available), bool(CS.out.cruiseState.enabled), tuple(button_events),
+      )
+      if snapshot != self._nexo_control_last or button_events:
+        _trace_nexo_long_init(
+          f"CONTROL mode={mode} enabled={bool(CC.enabled)} latActive={bool(CC.latActive)} "
+          f"longActive={bool(CC.longActive)} cruiseAvailable={bool(CS.out.cruiseState.available)} "
+          f"cruiseEnabled={bool(CS.out.cruiseState.enabled)} "
+          f"buttons={','.join(button_events) if button_events else 'none'} "
+          f"longBlockers={','.join(blockers) if blockers else 'none'}"
+        )
+        self._nexo_control_last = snapshot
+
+    return super().update(CC, CS, now_nanos)
+
+
 ENABLE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel, ButtonType.mainCruise)
 
 
 class CarInterface(CarInterfaceBase):
-  CarState = CarState
-  CarController = CarController
+  CarState = NexoQualifiedCarState
+  CarController = NexoTracingCarController
   RadarInterface = RadarInterface
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport, structs.CarState.GearShifter.manumatic)
@@ -275,35 +354,40 @@ class CarInterface(CarInterfaceBase):
 
       if is_nexo and disabling_normal_comms:
         _trace_nexo_long_init(f"START NEXOdriveAI long init bus={bus} addr=0x{addr:x}", reset=True)
-        _trace_nexo_long_init("STEP 1 enter extended diagnostics and suppress stock SCC")
-        disable_started = time.monotonic()
-        _trace_nexo_long_init(f"UDS TX ecu=0x{addr:X} bus={bus} requests=10 03 then 28 83 01")
-        disabled = disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+        safety_text = ",".join(
+          f"{cfg.safetyModel}:{int(cfg.safetyParam)}" for cfg in getattr(CP, "safetyConfigs", ())
+        ) or "unavailable"
         _trace_nexo_long_init(
-          f"UDS RESULT ecu=0x{addr:X} bus={bus} acknowledged={disabled} "
-          f"elapsed_ms={(time.monotonic() - disable_started) * 1000:.1f}"
+          f"CARPARAMS fingerprint={CP.carFingerprint} openpilotLong={bool(CP.openpilotLongitudinalControl)} "
+          f"pcmCruise={getattr(CP, 'pcmCruise', 'unavailable')} "
+          f"radarUnavailable={getattr(CP, 'radarUnavailable', 'unavailable')} "
+          f"flags={int(CP.flags)} safety={safety_text}"
         )
-        _trace_nexo_long_init(f"STEP 1 request completed={disabled}")
-        if not disabled:
-          _trace_nexo_long_init("FAIL stock SCC communication-control was not acknowledged")
-          raise RuntimeError("NEXO stock SCC communication could not be disabled")
+        _trace_nexo_long_init(
+          "UDS PLAN radar first: 10 07 then 2E 01 42; final SCC suppression: 10 03 then 28 83 01 "
+          "on ecu=0x7D0 bus=0 no-subaddress. 28 83 01 suppresses positive response; physical src0 silence is the success criterion."
+        )
 
-        # From this point onward a process crash can leave factory cruise muted.
-        # Persist the takeover before doing any additional work.
+        # Newer working XPlus programs the radar DID before the final
+        # CommunicationControl. A diagnostic-session change can otherwise wake
+        # the stock SCC stream after an earlier disable.
+        _trace_nexo_long_init("STEP 1 run radar-track DID sequence while stock SCC remains untouched")
+        tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=40)
+        _trace_nexo_long_init(f"STEP 1 radar-track request completed={tracks_enabled}")
+        if not tracks_enabled:
+          _trace_nexo_long_init("FAIL radar-track activation; stock SCC was not disabled")
+          raise RuntimeError("NEXO radar track activation failed")
+
+        # From this point onward the next operation can mute factory cruise, so
+        # persist recovery intent before issuing CommunicationControl.
         _set_nexo_takeover_marker("stock_scc_disabled")
         try:
-          _trace_nexo_long_init("STEP 2 run NEXOdriveAI radar-track sequence")
-          tracks_enabled = enable_radar_tracks(can_recv, can_send, bus, retries=40)
-          _trace_nexo_long_init(f"STEP 2 radar-track request completed={tracks_enabled}")
-          if not tracks_enabled:
-            raise RuntimeError("NEXO radar track activation failed")
-
-          _trace_nexo_long_init("STEP 3 re-suppress stock SCC after radar DID write and verify physical source0 silence")
+          _trace_nexo_long_init("STEP 2 final SCC suppression after radar DID; verify physical source0 SCC disappearance")
           stock_scc_silent = ensure_nexo_stock_scc_silent(
             can_recv, can_send, bus=bus, addr=addr, communication_control=communication_control,
             trace=_trace_nexo_long_init, attempts=3,
           )
-          _trace_nexo_long_init(f"STEP 3 verified source0 SCC silence={stock_scc_silent}")
+          _trace_nexo_long_init(f"STEP 2 physical source0 SCC silence={stock_scc_silent}")
           if not stock_scc_silent:
             raise RuntimeError("NEXO stock SCC remained active")
         except BaseException as error:
@@ -314,7 +398,7 @@ class CarInterface(CarInterfaceBase):
           raise
 
         _set_nexo_takeover_marker("longitudinal_takeover_ready")
-        _trace_nexo_long_init("DONE NEXOdriveAI disable-then-radar sequence; runtime SCC guard armed by card")
+        _trace_nexo_long_init("DONE NEXO radar-then-disable sequence; physical source0 silence verified; runtime SCC guard armed by card")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 

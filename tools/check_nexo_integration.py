@@ -20,8 +20,10 @@ PYTHON_FILES = (
   "opendbc_repo/opendbc/car/hyundai/carcontroller.py",
   "opendbc_repo/opendbc/car/hyundai/hyundaican.py",
   "opendbc_repo/opendbc/car/hyundai/interface.py",
+  "opendbc_repo/opendbc/car/hyundai/nexo_acc_fault.py",
   "opendbc_repo/opendbc/car/hyundai/radar_interface.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
+  "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_acc_fault.py",
   "opendbc_repo/opendbc/car/hyundai/tests/test_nexo_init.py",
   "selfdrive/car/nexo_guard.py",
   "selfdrive/car/tests/test_nexo_guard.py",
@@ -92,20 +94,31 @@ def parse_python_files() -> None:
 def validate_interface() -> None:
   source = read("opendbc_repo/opendbc/car/hyundai/interface.py")
   required = (
-    'raise RuntimeError("NEXO stock SCC communication could not be disabled")',
     'raise RuntimeError("NEXO radar track activation failed")',
+    'raise RuntimeError("NEXO stock SCC remained active")',
     "START NEXOdriveAI long init",
-    "DONE NEXOdriveAI disable-then-radar sequence; runtime SCC guard armed by card",
+    "UDS PLAN radar first",
+    "physical src0 silence is the success criterion",
+    "DONE NEXO radar-then-disable sequence; physical source0 silence verified; runtime SCC guard armed by card",
+    "NexoAccFaultQualifier",
+    "ret.accFaulted = decision.qualified_fault",
   )
   for token in required:
     require(token in source, f"interface contract missing: {token}")
 
-  disable_pos = source.find("disabled = disable_ecu")
-  radar_pos = source.find("tracks_enabled = enable_radar_tracks", disable_pos)
-  require(disable_pos >= 0 and radar_pos > disable_pos,
-          "NEXO init order must be extended-diagnostic disable -> radar-track programming")
+  radar_pos = source.find("tracks_enabled = enable_radar_tracks")
+  marker_pos = source.find('_set_nexo_takeover_marker("stock_scc_disabled")', radar_pos)
+  suppress_pos = source.find("stock_scc_silent = ensure_nexo_stock_scc_silent", marker_pos)
+  require(radar_pos >= 0 and marker_pos > radar_pos and suppress_pos > marker_pos,
+          "NEXO init order must be radar-track programming -> recovery marker -> final physical SCC suppression")
   require("_nexo_stock_scc_active" not in source,
           "startup-only SCC silence check must not replace the runtime raw-CAN guard")
+
+  stock_guard = (
+    'if self.CP.carFingerprint != CAR.HYUNDAI_NEXO_1ST_GEN or not self.CP.openpilotLongitudinalControl:'
+  )
+  require(stock_guard in source,
+          "ACC fault qualification must stay NEXO-long-only so stock cruise keeps base behavior")
 
 
 def validate_hyundaican() -> None:

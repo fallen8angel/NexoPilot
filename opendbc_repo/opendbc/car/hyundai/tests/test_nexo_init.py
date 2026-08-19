@@ -41,23 +41,31 @@ class TestNexoLongitudinalInit(unittest.TestCase):
       patcher.stop()
     self.temporary.cleanup()
 
-  def test_successful_takeover_leaves_recovery_marker(self):
-    calls = []
+  def test_successful_takeover_programs_radar_before_final_scc_suppression(self):
+    order = []
 
-    def disable(*args, **kwargs):
-      calls.append(kwargs["com_cont_req"])
+    def radar(*args, **kwargs):
+      order.append("radar")
       return True
 
-    with patch.object(interface, "disable_ecu", side_effect=disable), \
-         patch.object(interface, "enable_radar_tracks", return_value=True) as radar_enable, \
-         patch.object(interface, "ensure_nexo_stock_scc_silent", return_value=True) as verify_silence:
+    def verify(*args, **kwargs):
+      order.append("suppress")
+      return True
+
+    with patch.object(interface, "disable_ecu") as disable, \
+         patch.object(interface, "enable_radar_tracks", side_effect=radar) as radar_enable, \
+         patch.object(interface, "ensure_nexo_stock_scc_silent", side_effect=verify) as verify_silence:
       CarInterface.init(self.CP, self.can_recv, self.can_send)
 
-    self.assertEqual([b"\x28\x83\x01"], calls)
+    self.assertEqual(["radar", "suppress"], order)
+    disable.assert_not_called()
     self.assertEqual(40, radar_enable.call_args.kwargs["retries"])
     verify_silence.assert_called_once()
     self.assertTrue(interface.nexo_stock_scc_restore_pending())
     self.assertIn("longitudinal_takeover_ready", self.marker.read_text())
+    log = self.long_log.read_text()
+    self.assertLess(log.index("STEP 1 run radar-track"), log.index("STEP 2 final SCC suppression"))
+    self.assertIn("physical src0 silence is the success criterion", log)
 
   def test_source0_scc_verification_failure_restores_stock_before_raising(self):
     calls = []
@@ -72,38 +80,29 @@ class TestNexoLongitudinalInit(unittest.TestCase):
       with self.assertRaisesRegex(RuntimeError, "stock SCC remained active"):
         CarInterface.init(self.CP, self.can_recv, self.can_send)
 
-    self.assertEqual([b"\x28\x83\x01", b"\x28\x80\x01"], calls)
+    self.assertEqual([b"\x28\x80\x01"], calls)
     self.assertFalse(interface.nexo_stock_scc_restore_pending())
 
-  def test_radar_failure_restores_stock_before_raising(self):
-    calls = []
-
-    def disable(*args, **kwargs):
-      calls.append(kwargs["com_cont_req"])
-      return True
-
-    with patch.object(interface, "disable_ecu", side_effect=disable), \
-         patch.object(interface, "enable_radar_tracks", return_value=False):
+  def test_radar_failure_never_mutes_stock_scc(self):
+    with patch.object(interface, "disable_ecu") as disable, \
+         patch.object(interface, "enable_radar_tracks", return_value=False), \
+         patch.object(interface, "ensure_nexo_stock_scc_silent") as verify:
       with self.assertRaisesRegex(RuntimeError, "radar track activation"):
         CarInterface.init(self.CP, self.can_recv, self.can_send)
 
-    self.assertEqual(b"\x28\x83\x01", calls[0])
-    self.assertEqual(b"\x28\x80\x01", calls[1])
+    disable.assert_not_called()
+    verify.assert_not_called()
     self.assertFalse(interface.nexo_stock_scc_restore_pending())
 
-  def test_unexpected_init_exception_also_restores(self):
-    calls = []
-
-    def disable(*args, **kwargs):
-      calls.append(kwargs["com_cont_req"])
-      return True
-
-    with patch.object(interface, "disable_ecu", side_effect=disable), \
-         patch.object(interface, "enable_radar_tracks", side_effect=ValueError("boom")):
+  def test_radar_exception_never_mutes_stock_scc(self):
+    with patch.object(interface, "disable_ecu") as disable, \
+         patch.object(interface, "enable_radar_tracks", side_effect=ValueError("boom")), \
+         patch.object(interface, "ensure_nexo_stock_scc_silent") as verify:
       with self.assertRaisesRegex(ValueError, "boom"):
         CarInterface.init(self.CP, self.can_recv, self.can_send)
 
-    self.assertEqual([b"\x28\x83\x01", b"\x28\x80\x01"], calls)
+    disable.assert_not_called()
+    verify.assert_not_called()
     self.assertFalse(interface.nexo_stock_scc_restore_pending())
 
   def test_restore_retries_and_only_then_clears_marker(self):
