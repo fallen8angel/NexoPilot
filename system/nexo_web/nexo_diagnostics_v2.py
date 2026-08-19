@@ -210,15 +210,18 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
       ss = sm["selfdriveState"]
       pandas = sm["pandaStates"]
       radar = sm["radarState"]
+      lead = radar.leadOne
       panda = pandas[0] if len(pandas) else None
       errors = radar.radarErrors
       snapshot = (
         str(cs.gearShifter), bool(cs.brakePressed), bool(cs.gasPressed), bool(cs.accFaulted),
         bool(cs.cruiseState.available), bool(cs.cruiseState.enabled), str(ss.state), bool(ss.enabled), bool(ss.active),
         bool(panda.controlsAllowed) if panda is not None else None,
+        str(panda.safetyModel) if panda is not None else None,
         int(panda.safetyParam) if panda is not None else None,
         bool(panda.safetyRxChecksInvalid) if panda is not None else None,
         bool(errors.canError), bool(errors.radarFault), bool(errors.wrongConfig), bool(errors.radarUnavailableTemporary),
+        bool(lead.status), float(lead.dRel), float(lead.vRel), float(lead.aRel),
         str(ss.alertText1), str(ss.alertText2),
       )
       if snapshot != previous:
@@ -228,8 +231,9 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
         timeline.append(
           f"{elapsed:6.2f}s gear={snapshot[0]} brake={snapshot[1]} gas={snapshot[2]} accFault={snapshot[3]} "
           f"cruise={snapshot[4]}/{snapshot[5]} selfdrive={snapshot[6]}/{snapshot[7]}/{snapshot[8]} "
-          f"controlsAllowed={snapshot[9]} safetyParam={snapshot[10]} rxInvalid={snapshot[11]} "
-          f"radarErrors={snapshot[12:16]} alert={snapshot[16]!r} {snapshot[17]!r}"
+          f"controlsAllowed={snapshot[9]} safety={snapshot[10]}/{snapshot[11]} rxInvalid={snapshot[12]} "
+          f"radarErrors={snapshot[13:17]} leadOne=status:{snapshot[17]} dRel:{snapshot[18]:.2f} "
+          f"vRel:{snapshot[19]:.2f} aRel:{snapshot[20]:.2f} alert={snapshot[21]!r} {snapshot[22]!r}"
         )
         previous = snapshot
     except Exception as error:
@@ -266,7 +270,9 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     f"순정 SCC: {stock_scc} | 기타 버스 SCC: {other_scc} | openpilot SCC: {op_scc} | Panda 차단 SCC: {blocked_scc}",
     f"순정 FCA: {stock_fca} | 기타 버스 FCA: {other_fca} | openpilot FCA: {op_fca} | Panda 차단 FCA: {blocked_fca}",
     f"레이더 트랙 프레임: {radar_tracks}", f"판정: {verdict}",
-    "※ '순정 SCC'는 물리 source0(src=0)만 의미합니다. src=1~127은 기타 버스로 분리합니다.",
+    "※ src=0은 물리 bus0 RX입니다. src=1~127은 다른 물리 버스 RX로 분리합니다.",
+    "※ src=128~191은 Panda가 돌려준 openpilot TX echo/accepted이며 물리 bus=src-128입니다.",
+    "※ src>=192는 Panda safety가 거부한 TX이며 물리 bus=src-192입니다. 현재 CAN 메타데이터는 C safety hook의 세부 거부 사유 코드를 싣지 않으므로 address/payload와 controlsAllowed/safetyModel/safetyParam을 함께 확인합니다.",
     "", "[sendcan 요청 → Panda 결과]", *_flow_lines(requested, counts),
     "", "[SCC/FCA/레이더 CAN 집계]",
   ]
@@ -323,6 +329,7 @@ def raw_can_diagnostic_output(core) -> str:
     f"SCC: source0 {_source_count(counts, NEXO_SCC_ADDRS, 0)} | 기타버스 {_other_vehicle_count(counts, NEXO_SCC_ADDRS)} | 성공 {_category_count(counts, NEXO_SCC_ADDRS, 128, 192)} | 차단 {_category_count(counts, NEXO_SCC_ADDRS, 192)}",
     f"FCA: source0 {_source_count(counts, NEXO_FCA_ADDRS, 0)} | 기타버스 {_other_vehicle_count(counts, NEXO_FCA_ADDRS)} | 성공 {_category_count(counts, NEXO_FCA_ADDRS, 128, 192)} | 차단 {_category_count(counts, NEXO_FCA_ADDRS, 192)}",
     "※ source0(src=0)만 순정 ECU 물리 버스 판정에 사용하며 src=1~127은 별도 버스 수신으로 표시합니다.",
+    "※ src=128~191은 openpilot TX 반환 echo이며 src>=192는 Panda safety 차단 TX입니다.",
     "※ 순정 FCA11/FCA12 수신은 정상이며 SCC 중복 제어 판정에 포함하지 않습니다.",
     "", "[sendcan 요청 → Panda 결과]", *_flow_lines(requested, counts), "",
   ]
