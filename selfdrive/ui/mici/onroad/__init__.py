@@ -10,3 +10,87 @@ def blend_colors(a: rl.Color, b: rl.Color, f: float) -> rl.Color:
   return rl.color_from_hsv((h0 + f * dh) % 360,
                            s0 + f * (s1 - s0),
                            v0 + f * (v1 - v0))
+
+
+def _is_nexo(module) -> bool:
+  cp = module.ui_state.CP
+  fingerprint = getattr(cp, "carFingerprint", None) if cp is not None else None
+  return getattr(fingerprint, "name", str(fingerprint)) == "HYUNDAI_NEXO_1ST_GEN"
+
+
+def _patch_opkr_blind_spot(module) -> None:
+  """Draw NEXO blind-spot warnings as OPKR-style road-surface areas."""
+  ModelRenderer = module.ModelRenderer
+  if getattr(ModelRenderer, "_nexo_opkr_blind_spot_patched", False):
+    return
+
+  original_render = ModelRenderer._render
+
+  def _render(self, rect):
+    original_render(self, rect)
+
+    try:
+      if not _is_nexo(module):
+        return
+      sm = module.ui_state.sm
+      if not sm.valid["carState"]:
+        return
+      car_state = sm["carState"]
+      left_blind_spot = bool(car_state.leftBlindspot)
+      right_blind_spot = bool(car_state.rightBlindspot)
+    except Exception:
+      return
+
+    if not (left_blind_spot or right_blind_spot):
+      return
+    if len(self._lane_lines) < 3 or self._path.raw_points.shape[0] == 0:
+      return
+
+    max_distance = float(module.np.clip(
+      self._path.raw_points[-1, 0],
+      module.MIN_DRAW_DISTANCE,
+      module.MAX_DRAW_DISTANCE,
+    ))
+    warn_color = module.rl.Color(255, 0, 0, 190)
+    offset = module.np.array([self._rect.x, self._rect.y], dtype=module.np.float32)
+
+    def draw_area(lane_index: int, center_shift: float) -> None:
+      line = self._lane_lines[lane_index].raw_points
+      if line.shape[0] == 0:
+        return
+
+      line_max_distance = min(max_distance, float(line[-1, 0]))
+      max_idx = self._get_path_length_idx(line[:, 0], line_max_distance)
+
+      # OPKR_NEXO uses the ego-lane boundary and fills 2.8 m outward.
+      # Shift the polygon center by 1.4 m and use a 1.4 m half-width,
+      # producing an asymmetric 0..2.8 m area outside the lane boundary.
+      shifted = line.copy()
+      shifted[:, 1] += center_shift
+      points = self._map_line_to_polygon(
+        shifted,
+        1.4,
+        0.0,
+        max_idx,
+        True,
+      )
+      if points.size != 0:
+        module.draw_polygon(self._rect, points + offset, warn_color)
+
+    if left_blind_spot:
+      draw_area(1, 1.4)
+    if right_blind_spot:
+      draw_area(2, -1.4)
+
+  ModelRenderer._render = _render
+  ModelRenderer._nexo_opkr_blind_spot_patched = True
+
+
+# Load and patch the Mici model renderer after blend_colors is available.
+# model_renderer imports blend_colors from this package, so this eager import
+# safely applies the patch before AugmentedRoadView creates ModelRenderer.
+try:
+  from openpilot.selfdrive.ui.mici.onroad import model_renderer as _model_renderer
+  _patch_opkr_blind_spot(_model_renderer)
+except Exception as e:
+  print(f"NEXO Mici blind-spot patch failed: {e}")
