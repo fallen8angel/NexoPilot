@@ -18,6 +18,38 @@ def _is_nexo(module) -> bool:
   return getattr(fingerprint, "name", str(fingerprint)) == "HYUNDAI_NEXO_1ST_GEN"
 
 
+def _patch_nexo_always_lane_lines(module) -> None:
+  """Keep NEXO lane lines visible while disengaged using the existing black inactive style."""
+  ModelRenderer = module.ModelRenderer
+  if getattr(ModelRenderer, "_nexo_always_lane_lines_patched", False):
+    return
+
+  original_render = ModelRenderer._render
+
+  def _render(self, rect):
+    original_render(self, rect)
+
+    try:
+      if not _is_nexo(module):
+        return
+      if module.ui_state.status != module.UIStatus.DISENGAGED:
+        return
+
+      sm = module.ui_state.sm
+      if (sm.recv_frame["liveCalibration"] < module.ui_state.started_frame or
+          sm.recv_frame["modelV2"] < module.ui_state.started_frame):
+        return
+    except Exception:
+      return
+
+    # Mici already renders lane lines/road edges black in DISENGAGED state.
+    # The stock render path only hid them completely, so draw just the lines here.
+    self._draw_lane_lines()
+
+  ModelRenderer._render = _render
+  ModelRenderer._nexo_always_lane_lines_patched = True
+
+
 def _patch_opkr_blind_spot(module) -> None:
   """Draw NEXO blind-spot warnings as OPKR-style road-surface areas."""
   ModelRenderer = module.ModelRenderer
@@ -87,9 +119,10 @@ def _patch_opkr_blind_spot(module) -> None:
 
 # Load and patch the Mici model renderer after blend_colors is available.
 # model_renderer imports blend_colors from this package, so this eager import
-# safely applies the patch before AugmentedRoadView creates ModelRenderer.
+# safely applies the patches before AugmentedRoadView creates ModelRenderer.
 try:
   from openpilot.selfdrive.ui.mici.onroad import model_renderer as _model_renderer
+  _patch_nexo_always_lane_lines(_model_renderer)
   _patch_opkr_blind_spot(_model_renderer)
 except Exception as e:
-  print(f"NEXO Mici blind-spot patch failed: {e}")
+  print(f"NEXO Mici UI patch failed: {e}")
