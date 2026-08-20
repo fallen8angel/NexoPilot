@@ -304,7 +304,6 @@ void gen_crc_lookup_table_16(uint16_t poly, uint16_t crc_lut[]) {
         crc <<= 1;
       }
     }
-    crc_lut[i] = crc;
   }
 }
 
@@ -346,8 +345,14 @@ static void relay_malfunction_set(void) {
 static void generic_rx_checks(void) {
   gas_pressed_prev = gas_pressed;
 
-  // exit controls on rising edge of brake press
-  if (brake_pressed && (!brake_pressed_prev || vehicle_moving)) {
+  // NEXO MED keeps steering authorized while the brake turns longitudinal off.
+  // SCC12 is independently forced inactive by the Hyundai TX hook in this state.
+  const bool nexo_med_brake = (current_safety_mode == SAFETY_HYUNDAI) && hyundai_longitudinal &&
+                              hyundai_fcev_gas_signal && hyundai_nexo_dynamic_scc &&
+                              acc_main_on && hyundai_fcev_med_wait;
+
+  // exit controls on rising edge of brake press, except NEXO's lateral-only MED state
+  if (brake_pressed && (!brake_pressed_prev || vehicle_moving) && !nexo_med_brake) {
     controls_allowed = false;
   }
   brake_pressed_prev = brake_pressed;
@@ -494,7 +499,7 @@ int to_signed(int d, int bits) {
   return d_signed;
 }
 
-// given a new sample, update the sample_t struct
+// given a new sample, update sample_t struct
 void update_sample(struct sample_t *sample, int sample_new) {
   for (int i = MAX_SAMPLE_VALS - 1; i > 0; i--) {
     sample->values[i] = sample->values[i-1];
