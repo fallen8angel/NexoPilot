@@ -1,0 +1,39 @@
+name: Cleanup NexoPilot branches
+
+on:
+  push:
+    branches:
+      - NEXO
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.event.head_commit.message != 'chore: finalize NEXO branch cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Delete every remote branch except NEXO
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+            [ "$branch" = "NEXO" ] && continue
+            echo "Deleting $branch"
+            git push origin --delete "$branch"
+          done < <(git ls-remote --heads origin | awk '{sub("refs/heads/", "", $2); print $2}')
+
+      - name: Remove temporary cleanup files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/cleanup-nexo-branches.yml .github/cleanup-nexo-branches-trigger.txt
+          git commit -m "chore: finalize NEXO branch cleanup"
+          git push origin HEAD:NEXO
