@@ -19,7 +19,7 @@ def _is_nexo(module) -> bool:
 
 
 def _patch_nexo_always_lane_lines(module) -> None:
-  """Keep NEXO lane lines visible while disengaged using the existing black inactive style."""
+  """Keep NEXO lane lines and driving path visible while disengaged using the existing black inactive style."""
   ModelRenderer = module.ModelRenderer
   if getattr(ModelRenderer, "_nexo_always_lane_lines_patched", False):
     return
@@ -42,9 +42,10 @@ def _patch_nexo_always_lane_lines(module) -> None:
     except Exception:
       return
 
-    # Mici already renders lane lines/road edges black in DISENGAGED state.
-    # The stock render path only hid them completely, so draw just the lines here.
+    # Mici already renders lane lines/road edges and the driving path black
+    # in DISENGAGED state. The stock render path only hides them completely.
     self._draw_lane_lines()
+    self._draw_path(sm)
 
   ModelRenderer._render = _render
   ModelRenderer._nexo_always_lane_lines_patched = True
