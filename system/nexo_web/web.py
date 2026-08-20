@@ -39,6 +39,7 @@ from system.nexo_web import nexo_panda_fault_diagnostics as panda_fault_diagnost
 from system.nexo_web import nexo_runtime_guard_diagnostics as guard_diagnostics
 from system.nexo_web import nexo_unified_diagnostics as unified_diagnostics
 from system.nexo_web import web_carrot_ui as carrot_ui
+from system.nexo_web import web_device_ui as device_ui
 from system.nexo_web import web_hud_ui as hud_ui
 from system.nexo_web import web_remote_ui as remote_ui
 from system.nexo_web import web_core as core
@@ -149,7 +150,7 @@ class CarrotStyleHandler(_original_handler):
     if allowed:
       return True
     self._redirect(
-      f"업데이트/재부팅은 P단·완전 정지·주차브레이크·크루즈/오픈파일럿 비활성 상태에서만 가능합니다. 현재 상태: {state}",
+      f"업데이트/디바이스 조작은 P단·완전 정지·주차브레이크·크루즈/오픈파일럿 비활성 상태에서만 가능합니다. 현재 상태: {state}",
       path,
     )
     return False
@@ -182,8 +183,8 @@ class CarrotStyleHandler(_original_handler):
     if parsed.path == "/settings":
       self._send(carrot_ui.settings_page(core, message))
       return
-    if parsed.path == "/system":
-      self._send(carrot_ui.system_page(core, message, fetch_update=query.get("check", ["0"])[0] == "1"))
+    if parsed.path in ("/device", "/system"):
+      self._send(device_ui.device_page(core, carrot_ui, message, fetch_update=query.get("check", ["0"])[0] == "1"))
       return
     if parsed.path == "/hud/view":
       self._send(hud_ui.hud_view_page(core))
@@ -202,8 +203,24 @@ class CarrotStyleHandler(_original_handler):
   def do_POST(self) -> None:
     parsed = urlparse(self.path)
 
-    # Executable-code updates and reboot actions keep the stricter EPB gate.
-    if parsed.path in ("/update", "/settings/reboot") and not self._require_update_safe("/system" if parsed.path == "/update" else "/settings"):
+    # Executable-code updates and real device actions keep the stricter EPB gate.
+    safe_redirects = {
+      "/update": "/device",
+      "/settings/reboot": "/settings",
+      "/device/reboot": "/device",
+      "/device/poweroff": "/device",
+      "/device/recalibrate": "/device",
+    }
+    if parsed.path in safe_redirects and not self._require_update_safe(safe_redirects[parsed.path]):
+      return
+
+    if parsed.path in device_ui.DEVICE_ACTIONS:
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      action = device_ui.DEVICE_ACTIONS[parsed.path]
+      ok, result = device_ui.perform_device_action(action)
+      self._redirect(result, "/device")
       return
 
     if parsed.path == "/hud/toggle":
