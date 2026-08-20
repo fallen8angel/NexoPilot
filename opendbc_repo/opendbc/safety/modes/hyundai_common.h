@@ -46,6 +46,8 @@ extern bool hyundai_nexo_dynamic_scc;
 bool hyundai_nexo_dynamic_scc = false;
 
 static uint8_t hyundai_last_button_interaction;  // button messages since the user pressed an enable button
+static bool hyundai_fcev_med_wait = false;
+static bool hyundai_main_button_prev = false;
 
 void hyundai_common_init(uint16_t param) {
   const uint16_t HYUNDAI_PARAM_EV_GAS = 1;
@@ -67,8 +69,11 @@ void hyundai_common_init(uint16_t param) {
   hyundai_nexo_dynamic_scc = GET_FLAG(param, HYUNDAI_PARAM_NEXO_DYNAMIC_SCC);
 
   hyundai_last_button_interaction = HYUNDAI_PREV_BUTTON_SAMPLES;
+  hyundai_fcev_med_wait = false;
+  hyundai_main_button_prev = false;
+  acc_main_on = false;
 
-// LONG must be explicitly requested through CarParams.safetyParam. Keep all
+  // LONG must be explicitly requested through CarParams.safetyParam. Keep all
   // Hyundai longitudinal TX allowlists and payload limit checks active.
   const uint16_t HYUNDAI_PARAM_LONGITUDINAL = 4;
   hyundai_longitudinal = GET_FLAG(param, HYUNDAI_PARAM_LONGITUDINAL);
@@ -92,6 +97,16 @@ void hyundai_common_cruise_state_check(const bool cruise_engaged) {
 }
 
 void hyundai_common_cruise_buttons_check(const int cruise_button, const bool main_button) {
+  const bool nexo_med = hyundai_longitudinal && hyundai_fcev_gas_signal && hyundai_nexo_dynamic_scc;
+  const bool main_pressed = main_button && !hyundai_main_button_prev;
+
+  if (main_pressed && nexo_med) {
+    acc_main_on = !acc_main_on;
+    controls_allowed = acc_main_on;
+    hyundai_fcev_med_wait = acc_main_on;
+  }
+  hyundai_main_button_prev = main_button;
+
   if ((cruise_button == HYUNDAI_BTN_RESUME) || (cruise_button == HYUNDAI_BTN_SET) || (cruise_button == HYUNDAI_BTN_CANCEL) || main_button) {
     hyundai_last_button_interaction = 0U;
   } else {
@@ -99,16 +114,44 @@ void hyundai_common_cruise_buttons_check(const int cruise_button, const bool mai
   }
 
   if (hyundai_longitudinal) {
+    // XPlus-style NEXO MED_WAIT is steering-only. Generic pedal bookkeeping can
+    // clear controls_allowed, so keep lateral authorization aligned with MODE.
+    if (nexo_med && acc_main_on && hyundai_fcev_med_wait) {
+      controls_allowed = true;
+    }
+
+    // Braking returns NEXO speed control to MED_WAIT while leaving lateral armed.
+    if (nexo_med && acc_main_on && brake_pressed) {
+      hyundai_fcev_med_wait = true;
+      controls_allowed = true;
+    }
+
     // enter controls on falling edge of resume or set
     bool set = (cruise_button != HYUNDAI_BTN_SET) && (cruise_button_prev == HYUNDAI_BTN_SET);
     bool res = (cruise_button != HYUNDAI_BTN_RESUME) && (cruise_button_prev == HYUNDAI_BTN_RESUME);
     if (set || res) {
       controls_allowed = true;
+      if (nexo_med) {
+        acc_main_on = true;
+        hyundai_fcev_med_wait = false;
+      }
     }
 
-    // exit controls on cancel press
+    // NEXO uses two-stage CANCEL: SPEED_CONTROL -> MED_WAIT -> OFF.
+    // Other Hyundai longitudinal platforms keep the stock one-stage behavior.
     if (cruise_button == HYUNDAI_BTN_CANCEL) {
-      controls_allowed = false;
+      if (nexo_med && acc_main_on) {
+        if (hyundai_fcev_med_wait) {
+          controls_allowed = false;
+          acc_main_on = false;
+          hyundai_fcev_med_wait = false;
+        } else {
+          controls_allowed = true;
+          hyundai_fcev_med_wait = true;
+        }
+      } else {
+        controls_allowed = false;
+      }
     }
 
     cruise_button_prev = cruise_button;
