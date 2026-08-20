@@ -132,8 +132,8 @@ class MiciMainLayout(Scroller):
 
       # Match XPlus: enable once by default on NEXO, then respect the user's toggle forever.
       if is_nexo and not ui_state.params.get_bool("ReverseDriverCameraNexoMigrated"):
-        ui_state.params.put_bool_nonblocking("ReverseDriverCamera", True)
-        ui_state.params.put_bool_nonblocking("ReverseDriverCameraNexoMigrated", True)
+        ui_state.params.put_bool("ReverseDriverCamera", True)
+        ui_state.params.put_bool("ReverseDriverCameraNexoMigrated", True)
         self._reverse_driver_camera_migration_pending = True
         return True
 
