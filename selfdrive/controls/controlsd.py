@@ -11,6 +11,7 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
+from opendbc.car.hyundai.values import CAR
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -23,6 +24,8 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
+ButtonType = car.CarState.ButtonEvent.Type
+GearShifter = car.CarState.GearShifter
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
@@ -44,6 +47,13 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+
+    # First-gen NEXO MED state mirrors XPlus: MODE arms steering only, SET/RES
+    # adds longitudinal control, brake/first CANCEL returns to steering-only,
+    # and a second CANCEL while waiting turns MED fully off.
+    self.nexo_med = self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl
+    self.nexo_med_lateral = False
+    self.nexo_med_speed = False
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -87,15 +97,57 @@ class Controls:
 
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
+    selfdrive_enabled = self.sm['selfdriveState'].enabled
+
+    if self.nexo_med:
+      main_pressed = any(b.type == ButtonType.mainCruise and b.pressed for b in CS.buttonEvents)
+      speed_pressed = any(b.type in (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.resumeCruise) and b.pressed
+                          for b in CS.buttonEvents)
+      cancel_pressed = any(b.type == ButtonType.cancel and b.pressed for b in CS.buttonEvents)
+
+      if main_pressed:
+        self.nexo_med_lateral = not self.nexo_med_lateral
+        if not self.nexo_med_lateral:
+          self.nexo_med_speed = False
+
+      if speed_pressed:
+        self.nexo_med_lateral = True
+        self.nexo_med_speed = True
+
+      # Braking is the XPlus MED transition from speed control back to steering-only.
+      if CS.brakePressed and (self.nexo_med_speed or selfdrive_enabled):
+        self.nexo_med_lateral = True
+        self.nexo_med_speed = False
+
+      # Two-stage CANCEL: SPEED -> MED, then MED -> OFF.
+      if cancel_pressed:
+        if self.nexo_med_speed:
+          self.nexo_med_speed = False
+          self.nexo_med_lateral = True
+        elif self.nexo_med_lateral:
+          self.nexo_med_lateral = False
+
+      # Never use MED to bypass real disable conditions.
+      if any(e.immediateDisable or e.softDisable for e in self.sm['onroadEvents']):
+        self.nexo_med_lateral = False
+        self.nexo_med_speed = False
 
     CC = car.CarControl.new_message()
-    CC.enabled = self.sm['selfdriveState'].enabled
+    # Keep CarControl enabled while MED owns lateral so Panda heartbeat and
+    # controls_allowed remain aligned. Longitudinal has its own independent gate.
+    CC.enabled = selfdrive_enabled or (self.nexo_med and self.nexo_med_lateral)
 
     # Check which actuators can be enabled
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
-    CC.latActive = self.sm['selfdriveState'].active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
+    driving_gear = CS.gearShifter in (GearShifter.drive, GearShifter.low)
+    lateral_requested = self.sm['selfdriveState'].active or (self.nexo_med and self.nexo_med_lateral and driving_gear)
+    CC.latActive = lateral_requested and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
-    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+
+    longitudinal_requested = selfdrive_enabled
+    if self.nexo_med:
+      longitudinal_requested = longitudinal_requested and self.nexo_med_speed
+    CC.longActive = longitudinal_requested and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -157,8 +209,8 @@ class Controls:
 
     hudControl = CC.hudControl
     hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
-    hudControl.speedVisible = CC.enabled
-    hudControl.lanesVisible = CC.enabled
+    hudControl.speedVisible = CC.longActive if self.nexo_med else CC.enabled
+    hudControl.lanesVisible = CC.latActive if self.nexo_med else CC.enabled
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
     hudControl.leadDistance = self.sm['longitudinalPlan'].leadDistance
     hudControl.leadRelSpeed = self.sm['longitudinalPlan'].leadRelSpeed
@@ -171,7 +223,7 @@ class Controls:
       hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
 
-    if self.sm['selfdriveState'].active:
+    if CC.latActive:
       CO = self.sm['carOutput']
       if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
         self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > \
