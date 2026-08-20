@@ -195,6 +195,9 @@ static void hyundai_rx_hook(const CANPacket_t *msg) {
 
     if (msg->addr == 0x394U) {
       brake_pressed = ((msg->data[5] >> 5U) & 0x3U) == 0x2U;
+      if (hyundai_longitudinal && hyundai_fcev_gas_signal && hyundai_nexo_dynamic_scc && acc_main_on && brake_pressed) {
+        hyundai_fcev_med_wait = true;
+      }
     }
   }
 }
@@ -239,6 +242,14 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
     // normal controls_allowed and pedal safety gates.
     if (hyundai_nexo_dynamic_scc && !get_longitudinal_allowed() && (acc_mode != 0)) {
       violation = true;
+    }
+
+    // MED is deliberately lateral-only. Panda keeps steering authorization but
+    // independently rejects any active SCC mode or non-zero longitudinal command.
+    if (hyundai_nexo_dynamic_scc && hyundai_fcev_gas_signal && hyundai_fcev_med_wait) {
+      violation |= (acc_mode != 0);
+      violation |= (desired_accel_raw != 0);
+      violation |= (desired_accel_val != 0);
     }
 
     if (violation) {
