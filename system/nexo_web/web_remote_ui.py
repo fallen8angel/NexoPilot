@@ -9,7 +9,7 @@ NAV_ITEMS = (
   ("camera", "/live", "카메라"),
   ("hud", "/hud", "HUD"),
   ("diagnostics", "/diagnostics", "진단"),
-  ("system", "/system", "시스템"),
+  ("device", "/device", "내 디바이스"),
   ("remote", "/remote", "원격"),
 )
 
