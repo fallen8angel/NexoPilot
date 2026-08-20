@@ -61,9 +61,6 @@ class CarState(CarStateBase):
     self.cluster_speed_counter = CLUSTER_SAMPLE_RATE
 
     self.params = CarControllerParams(CP)
-    # Match current XPlus behavior on legacy NEXO: do not advertise cruise MAIN
-    # immediately at boot. The physical MAIN button owns this state.
-    self.main_enabled = False
     # NEXO learned gear fallback: keep the last valid gear when the raw value is transient/unknown.
     self.gear_shifter = structs.CarState.GearShifter.park
     # Stock-cruise compatibility templates. NEXO openpilot longitudinal builds
@@ -132,9 +129,8 @@ class CarState(CarStateBase):
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
         # ACCEnable becomes disabled after the stock SCC ECU is intentionally
         # silenced. It is therefore not a valid availability/fault signal for
-        # NEXO openpilot longitudinal. Use the driver's MAIN state instead so
-        # the cluster does not show CRUISE immediately after boot.
-        ret.cruiseState.available = self.main_enabled
+        # NEXO openpilot longitudinal. Buttons and controls state own engagement.
+        ret.cruiseState.available = True
         ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       else:
         ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
@@ -222,9 +218,6 @@ class CarState(CarStateBase):
     prev_lda_button = self.lda_button
     self.cruise_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwState"])
     self.main_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"])
-    if (self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl and
-        prev_main_buttons == Buttons.NONE and self.main_buttons[-1] != Buttons.NONE):
-      self.main_enabled = not self.main_enabled
     if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
       self.lda_button = cp.vl["BCM_PO_11"]["LDA_BTN"]
 
