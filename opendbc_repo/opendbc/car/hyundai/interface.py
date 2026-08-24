@@ -72,13 +72,17 @@ def _clear_nexo_takeover_marker() -> None:
 
 
 def restore_nexo_stock_scc_communication(can_recv, can_send, *, bus: int = 0, addr: int = 0x7D0,
-                                         reason: str = "", retries: int = 3) -> bool:
+                                         reason: str = "", retries: int = 3,
+                                         release_owner_on_failure: bool = False) -> bool:
   """Best-effort restoration without letting an old card process undo a newer takeover.
 
   The owner lock serializes restore against the final NEXO re-suppress/verify
   step. An older process that exits after a newer card process has claimed SCC
   ownership returns without sending 0x28 0x80 0x01 and without clearing the
-  newer process recovery marker.
+  newer process recovery marker. An exiting current owner can hand ownership
+  off after all local restore attempts fail while keeping restore_pending set,
+  so the successor card can repair stock SCC immediately instead of waiting for
+  the previous PID to disappear.
   """
   caller_token = current_owner_token()
   with owner_lock():
@@ -119,6 +123,14 @@ def restore_nexo_stock_scc_communication(can_recv, can_send, *, bus: int = 0, ad
         time.sleep(0.05)
 
     _set_nexo_takeover_marker("restore_pending")
+    if release_owner_on_failure:
+      released = clear_owner_if_current_unlocked(caller_token)
+      message = (
+        f"RESTORE HANDOFF reason={reason or 'unspecified'} caller={caller_token} "
+        f"releasedOwner={released} marker=restore_pending"
+      )
+      _trace_nexo_restore(message)
+      _trace_nexo_long_init(message)
     return False
 
 
@@ -416,9 +428,15 @@ class CarInterface(CarInterfaceBase):
     # stock mode also repairs stale owner/marker state from a dead process.
     if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
       owner_exists = bool(read_owner_unlocked())
-      if nexo_stock_scc_restore_pending() or owner_exists or current_process_owns():
+      current_owner = current_process_owns()
+      if nexo_stock_scc_restore_pending() or owner_exists or current_owner:
+        # A current takeover owner is the only process that can safely spend the
+        # longer teardown window here. The extra attempts cover the ECU's
+        # diagnostic-session hand-back; stale/stock repair keeps the old bound.
+        retries = 6 if current_owner else 3
         restored = restore_nexo_stock_scc_communication(
           can_recv, can_send, bus=0, addr=0x7D0, reason="CarInterface.deinit",
+          retries=retries, release_owner_on_failure=True,
         )
         _trace_nexo_long_init(f"DEINIT stock SCC communication restore acknowledged={restored}")
         return restored
