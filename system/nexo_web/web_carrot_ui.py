@@ -11,6 +11,19 @@ from openpilot.common.params import Params
 
 PANDA_FW_STATUS = Path("/data/nexopilot/panda_fw/status.json")
 PANDA_FW_READY = Path("/data/nexopilot/panda_fw/ready.json")
+REVERSE_DRIVER_CAMERA_SETTING = Path("/data/nexopilot/reverse_driver_camera")
+
+
+def reverse_driver_camera_enabled() -> bool:
+  try:
+    return REVERSE_DRIVER_CAMERA_SETTING.read_text(encoding="utf-8").strip() == "1"
+  except (OSError, UnicodeError):
+    return False
+
+
+def set_reverse_driver_camera(enabled: bool) -> None:
+  REVERSE_DRIVER_CAMERA_SETTING.parent.mkdir(parents=True, exist_ok=True)
+  REVERSE_DRIVER_CAMERA_SETTING.write_text("1" if enabled else "0", encoding="utf-8")
 
 # Carrot's current settings panel exposes these standard openpilot controls.
 # NexoPilot maps the longitudinal-alpha item to its existing
@@ -294,6 +307,9 @@ def settings_page(core, message: str = "") -> str:
       checked = " checked" if core.param_bool(params, key) else ""
       extra = "<span class='pill bad'>재부팅 필요</span>" if key == "AlphaLongitudinalEnabled" else ""
       rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><div class="row"><div><div class="title">{html.escape(title)} {extra}</div><div class="desc">{html.escape(desc)}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
+      if group_name == "주행":
+        reverse_checked = " checked" if reverse_driver_camera_enabled() else ""
+        rows.append(f'''<form method="post" action="/reverse-camera/toggle"><div class="row"><div><div class="title">후진 시 실내 카메라 전환</div><div class="desc">R단에 들어가면 주행 화면 대신 실내 운전자 카메라를 표시하고 R단 해제 시 원래 화면으로 돌아갑니다.</div></div><label class="switch"><input type="checkbox"{reverse_checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
     sections.append(f'<div class="section-title">{html.escape(group_name)}</div><div class="card">{"".join(rows)}</div>')
 
   try:
@@ -306,7 +322,7 @@ def settings_page(core, message: str = "") -> str:
   )
   long_note = "롱컨 활성 시 적용" if core.param_bool(params, "AlphaLongitudinalEnabled") else "현재 일반 크루즈이므로 저장은 가능하지만 순정 ACC에는 적용되지 않음"
 
-  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 설정</title><style>{_css(core)}</style></head><body><main><div class="hero"><div class="eyebrow">CARROT-STYLE SETTINGS</div><h1>차량 설정</h1><div class="mini">설정 변경은 P + 완전 정지 + 주차브레이크 + 크루즈/오픈파일럿 비활성 상태에서만 허용됩니다.</div></div>{_message(message)}
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 설정</title><style>{_css(core)}</style></head><body><main><div class="hero"><div class="eyebrow">CARROT-STYLE SETTINGS</div><h1>차량 설정</h1><div class="mini">설정 변경은 P + 완전 정지 + 크루즈/오픈파일럿 비활성 상태에서만 허용됩니다.</div></div>{_message(message)}
   <div class="section-title">차량</div><div class="card"><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button>차량 선택 저장</button></form><div class="row"><div><div class="title">레이더 트랙</div><div class="desc">넥쏘에서는 자동 관리합니다. 안전상 별도 ON/OFF 메뉴를 두지 않습니다.</div></div><span class="value">자동</span></div></div>
   {''.join(sections)}
   <div class="section-title">롱컨 성향</div><div class="card"><div class="title">주행 성향</div><div class="desc">공격적 / 표준 / 여유. {html.escape(long_note)}</div><div class="personality">{personality_buttons}</div></div>

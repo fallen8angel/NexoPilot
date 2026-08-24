@@ -1,4 +1,6 @@
 import pyray as rl
+import time
+from pathlib import Path
 import cereal.messaging as messaging
 from cereal import car
 from openpilot.selfdrive.ui.mici.layouts.home import MiciHomeLayout
@@ -42,6 +44,8 @@ class MiciMainLayout(Scroller):
     self._reverse_driver_camera_dialog: DriverCameraDialog | None = None
     self._reverse_driver_camera_closing = False
     self._reverse_driver_camera_requested = False
+    self._reverse_driver_camera_setting = False
+    self._reverse_driver_camera_setting_next_check = 0.0
     self._reverse_driver_camera_migration_checked = False
     self._reverse_driver_camera_migration_pending = False
 
@@ -119,8 +123,16 @@ class MiciMainLayout(Scroller):
     super()._render(self._rect)
 
   def _reverse_camera_enabled(self) -> bool:
-    # The prebuilt Params module does not contain the optional reverse-camera keys.
-    return False
+    # Use a standalone setting file because the shipped prebuilt Params module
+    # predates the optional ReverseDriverCamera key.
+    now = time.monotonic()
+    if now >= self._reverse_driver_camera_setting_next_check:
+      try:
+        self._reverse_driver_camera_setting = Path("/data/nexopilot/reverse_driver_camera").read_text(encoding="utf-8").strip() == "1"
+      except (OSError, UnicodeError):
+        self._reverse_driver_camera_setting = False
+      self._reverse_driver_camera_setting_next_check = now + 0.5
+    return self._reverse_driver_camera_setting
 
   def _handle_transitions(self):
     # Don't pop if onboarding

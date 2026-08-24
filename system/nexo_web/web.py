@@ -235,6 +235,23 @@ class CarrotStyleHandler(_original_handler):
       self._redirect(result, "/device")
       return
 
+    if parsed.path == "/reverse-camera/toggle":
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      if not self._require_parked("/settings"):
+        return
+      if self._read_small_form() is None:
+        return
+      try:
+        enabled = not carrot_ui.reverse_driver_camera_enabled()
+        carrot_ui.set_reverse_driver_camera(enabled)
+      except Exception as error:
+        self._redirect(f"후진 실내 카메라 설정 저장 실패: {error}", "/settings")
+        return
+      self._redirect("후진 시 실내 카메라 전환을 활성화했습니다." if enabled else "후진 시 실내 카메라 전환을 비활성화했습니다.", "/settings")
+      return
+
     if parsed.path == "/hud/toggle":
       if not self._same_origin():
         self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
