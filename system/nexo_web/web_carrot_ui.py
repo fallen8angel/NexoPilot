@@ -7,6 +7,13 @@ from pathlib import Path
 
 from cereal import car, messaging
 from openpilot.common.params import Params
+from openpilot.selfdrive.selfdrived.nexo_experimental_mode import (
+  HYSTERESIS_KPH,
+  MAX_SWITCH_SPEED_KPH,
+  MIN_SWITCH_SPEED_KPH,
+  SWITCH_SPEED_STEP_KPH,
+  load_settings as load_nexo_experimental_speed_settings,
+)
 
 
 PANDA_FW_STATUS = Path("/data/nexopilot/panda_fw/status.json")
@@ -297,6 +304,7 @@ def dashboard_page(core, message: str = "", fetch_update: bool = False) -> str:
 def settings_page(core, message: str = "") -> str:
   params = Params()
   forced = core.force_nexo_enabled()
+  nexo_speed_settings = load_nexo_experimental_speed_settings()
   sections: list[str] = []
   for group_name, group in TOGGLE_GROUPS:
     rows: list[str] = []
@@ -307,6 +315,9 @@ def settings_page(core, message: str = "") -> str:
     if group_name == "주행":
       reverse_checked = " checked" if reverse_driver_camera_enabled() else ""
       rows.append(f'''<form method="post" action="/reverse-camera/toggle"><div class="row"><div><div class="title">후진 시 실내 카메라 전환</div><div class="desc">R단에 들어가면 주행 화면 대신 실내 운전자 카메라를 표시하고 R단 해제 시 원래 화면으로 돌아갑니다.</div></div><label class="switch"><input type="checkbox"{reverse_checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
+      speed_switch_checked = " checked" if nexo_speed_settings.enabled else ""
+      rows.append(f'''<form method="post" action="/experimental-speed-switch/toggle"><div class="row"><div><div class="title">목표 속도 도달 시 일반 모드 전환</div><div class="desc">XPlus 방식으로 MED 속도 제어 중 낮은 속도에서는 실험 모드를 사용하고 기준 속도에 도달하면 일반 모드로 전환합니다.</div></div><label class="switch"><input type="checkbox"{speed_switch_checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
+      rows.append(f'''<div class="row"><div><div class="title">실험 모드 전환 기준 속도</div><div class="desc">{MIN_SWITCH_SPEED_KPH}~{MAX_SWITCH_SPEED_KPH}km/h 범위에서 {SWITCH_SPEED_STEP_KPH}km/h씩 조절합니다. 모드 반복 전환을 막기 위해 기준 속도 전후 약 {HYSTERESIS_KPH:.0f}km/h의 여유 구간을 둡니다.</div></div><div style="display:flex;align-items:center;gap:8px;min-width:180px"><form method="post" action="/experimental-speed-switch/speed"><input type="hidden" name="delta" value="-{SWITCH_SPEED_STEP_KPH}"><button class="secondary" style="margin:0;padding:10px 14px">−{SWITCH_SPEED_STEP_KPH}</button></form><span class="value" style="min-width:64px;text-align:center">{nexo_speed_settings.speed_kph} km/h</span><form method="post" action="/experimental-speed-switch/speed"><input type="hidden" name="delta" value="{SWITCH_SPEED_STEP_KPH}"><button class="secondary" style="margin:0;padding:10px 14px">+{SWITCH_SPEED_STEP_KPH}</button></form></div></div>''')
     sections.append(f'<div class="section-title">{html.escape(group_name)}</div><div class="card">{"".join(rows)}</div>')
 
   try:
