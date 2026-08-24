@@ -35,7 +35,7 @@ def clamp(value, min_value, max_value):
 class Spinner(Widget):
   def __init__(self):
     super().__init__()
-    self._comma_texture = gui_app.texture("images/spinner_comma.png", gui_app.width, gui_app.height)
+    self._comma_texture = gui_app.texture("images/nexo_agnos_bg.png", gui_app.width, gui_app.height)
     self._spinner_texture = gui_app.texture("images/spinner_track.png", TEXTURE_SIZE, TEXTURE_SIZE, alpha_premultiply=True)
     self._rotation = 0.0
     self._progress: int | None = None
@@ -75,9 +75,8 @@ class Spinner(Widget):
     rl.draw_texture_pro(self._spinner_texture, rl.Rectangle(0, 0, TEXTURE_SIZE, TEXTURE_SIZE),
                         rl.Rectangle(center.x, center.y, TEXTURE_SIZE, TEXTURE_SIZE),
                         spinner_origin, self._rotation, rl.WHITE)
-    # Mici display glass is offset by the camera housing, so center the artwork in the visible panel.
-    logo_x_offset = rect.width * 0.25
-    rl.draw_texture_v(self._comma_texture, rl.Vector2(logo_x_offset, 0), rl.WHITE)
+    # Use the exact same full-screen artwork and position as the AGNOS background.
+    rl.draw_texture_v(self._comma_texture, rl.Vector2(0, 0), rl.WHITE)
 
     # Display the progress bar or text based on user input
     if self._progress is not None:
