@@ -153,6 +153,20 @@ class TestNexoLongitudinalInit(unittest.TestCase):
     self.assertFalse(self.marker.exists())
     self.assertFalse(self.owner.exists())
 
+  def test_failed_owner_deinit_hands_restore_to_successor(self):
+    self.marker.write_text("owned longitudinal_takeover_ready")
+    self.owner.write_text(nexo_session_owner.current_owner_token() + "\n")
+
+    with patch.object(interface, "disable_ecu", return_value=False) as disable:
+      restored = CarInterface.deinit(self.CP, self.can_recv, self.can_send)
+
+    self.assertFalse(restored)
+    self.assertEqual(6, disable.call_count)
+    self.assertTrue(self.marker.exists())
+    self.assertIn("restore_pending", self.marker.read_text())
+    self.assertFalse(self.owner.exists())
+    self.assertIn("RESTORE HANDOFF", self.restore_log.read_text())
+
   def test_stock_cruise_without_marker_does_not_touch_uds(self):
     self.CP.openpilotLongitudinalControl = False
     with patch.object(interface, "disable_ecu") as disable, \
