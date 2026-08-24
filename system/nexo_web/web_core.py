@@ -308,22 +308,50 @@ def model_snapshot_json() -> bytes:
   return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def update_status(fetch: bool = False) -> dict[str, str | bool]:
-  result: dict[str, str | bool] = {
-    "current": git_value("rev-parse", "--short", "HEAD"),
-    "remote": "확인 전",
-    "available": False,
-    "error": "",
-  }
+_update_status_lock = threading.Lock()
+_update_last_error = ""
+_update_last_check = 0.0
+
+
+def update_status(fetch: bool = False) -> dict[str, str | bool | float]:
+  global _update_last_error, _update_last_check
   if fetch:
     fetched = git_run("fetch", "origin", BRANCH, timeout=60)
-    if fetched.returncode != 0:
-      result["error"] = fetched.stderr.strip() or fetched.stdout.strip() or "업데이트 확인 실패"
-      return result
-    current = git_value("rev-parse", "HEAD")
-    remote = git_value("rev-parse", f"origin/{BRANCH}")
-    result["current"], result["remote"], result["available"] = current[:9], remote[:9], current != remote
-  return result
+    with _update_status_lock:
+      _update_last_check = time.time()
+      _update_last_error = "" if fetched.returncode == 0 else (fetched.stderr.strip() or fetched.stdout.strip() or "업데이트 확인 실패")
+
+  current = git_value("rev-parse", "HEAD")
+  remote = git_value("rev-parse", f"origin/{BRANCH}")
+  with _update_status_lock:
+    error = _update_last_error
+    checked_at = _update_last_check
+  remote_known = remote != "확인 불가"
+  return {
+    "current": current[:9],
+    "remote": remote[:9] if remote_known else "확인 중",
+    "available": bool(remote_known and current != remote),
+    "error": error,
+    "checkedAt": checked_at,
+    "checking": checked_at == 0.0,
+  }
+
+
+def update_status_json() -> bytes:
+  return json.dumps(update_status(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def update_monitor(interval: float = 300.0) -> None:
+  """Check origin/NEXO immediately, then refresh the cached ref every five minutes."""
+  while True:
+    try:
+      update_status(fetch=True)
+    except Exception as error:
+      global _update_last_error, _update_last_check
+      with _update_status_lock:
+        _update_last_error = f"업데이트 자동 확인 실패: {error}"
+        _update_last_check = time.time()
+    time.sleep(interval)
 
 
 def perform_update() -> tuple[bool, str]:
