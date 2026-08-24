@@ -83,24 +83,6 @@ function launch {
     bash "$DIR/scripts/install_nexo_agnos_bg.sh" || echo "NexoPilot: AGNOS background install failed"
   fi
 
-  # Show the NexoPilot boot artwork even on prebuilt installations where the
-  # normal build spinner is skipped.
-  SPINNER_PID=""
-  stop_nexo_spinner() {
-    if [ -n "${SPINNER_PID}" ]; then
-      kill "${SPINNER_PID}" 2>/dev/null || true
-      wait "${SPINNER_PID}" 2>/dev/null || true
-      SPINNER_PID=""
-    fi
-  }
-  if [ -f "$DIR/system/ui/spinner.py" ]; then
-    python3 "$DIR/system/ui/spinner.py" </dev/null &
-    SPINNER_PID=$!
-    trap stop_nexo_spinner EXIT
-    # Give the display process enough time to initialize and keep the NEXO logo visible.
-    sleep 4
-  fi
-
   # NexoPilot carries a prebuilt marker, so the normal manager build can be
   # skipped even after Hyundai safety source changes. Prepare a Panda app and
   # matching development bootstub from the current checkout before pandad is
@@ -114,10 +96,6 @@ function launch {
       exit 1
     fi
   fi
-
-  # Hand the display over to manager/UI after boot preparation completes.
-  stop_nexo_spinner
-  trap - EXIT
 
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
