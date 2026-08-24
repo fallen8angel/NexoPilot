@@ -91,6 +91,8 @@ function launch {
     python3 "$DIR/system/ui/spinner.py" </dev/null &
     SPINNER_PID=$!
     trap stop_nexo_spinner EXIT
+    # Give the display process enough time to initialize and keep the NEXO logo visible.
+    sleep 4
   fi
 
   # NexoPilot carries a prebuilt marker, so the normal manager build can be
