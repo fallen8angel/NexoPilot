@@ -329,14 +329,11 @@ def settings_page(core, message: str = "") -> str:
 
 def system_page(core, message: str = "", fetch_update: bool = False) -> str:
   update = core.update_status(fetch=fetch_update)
-  firmware = _firmware_status()
   allowed, gate = stationary_gate(core)
   dirty = core.git_value("status", "--porcelain")
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 시스템</title><style>{_css(core)}</style></head><body><main><div class="hero"><div class="eyebrow">DEVICE · SOFTWARE</div><h1>시스템</h1><div class="status {'candidate' if allowed else 'warn'}"><span class="dot"></span><div><div class="status-label">{'설정 변경 가능' if allowed else '설정 변경 잠금'}</div><div class="mini">{html.escape(gate)}</div></div></div></div>{_message(message)}
   <div class="card"><h2>소프트웨어</h2><div class="row"><span>현재 버전</span><span class="value">{html.escape(str(update['current']))}</span></div><div class="row"><span>원격 버전</span><span class="value">{html.escape(str(update['remote']))}</span></div><div class="row"><span>작업 트리</span><span class="value">{'변경 있음' if dirty.strip() else 'Clean'}</span></div><a href="/system?check=1"><button class="secondary">업데이트 확인</button></a><form method="post" action="/update"><button>업데이트만 설치</button></form></div>
-  <div class="card"><h2>Panda 펌웨어</h2><div class="row"><span>현재 safety 소스 일치 준비</span><span class="value">{'Ready' if firmware.get('ready') else '확인 필요'}</span></div><div class="row"><span>준비된 버전</span><span class="value">{html.escape(str(firmware.get('firmwareVersion','확인 불가')))}</span></div><div class="desc">빌드 실패 시 NexoPilot은 롱컨을 끄고 일반 크루즈 경로로 되돌리는 fail-closed 정책을 유지합니다.</div></div>
   <div class="card"><h2>장치</h2><a href="/live"><button class="secondary">전방·운전자 카메라 보기</button></a><form method="post" action="/settings/reboot"><button class="secondary">콤마 재부팅</button></form></div>
-  <div class="card"><h2>시스템 정보</h2><pre>{html.escape(core.system_output())}</pre></div>
   {_nav('system')}</main></body></html>'''
 
 
