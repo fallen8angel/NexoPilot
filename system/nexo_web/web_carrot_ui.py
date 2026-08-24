@@ -307,9 +307,9 @@ def settings_page(core, message: str = "") -> str:
       checked = " checked" if core.param_bool(params, key) else ""
       extra = "<span class='pill bad'>재부팅 필요</span>" if key == "AlphaLongitudinalEnabled" else ""
       rows.append(f'''<form method="post" action="/toggle"><input type="hidden" name="key" value="{key}"><div class="row"><div><div class="title">{html.escape(title)} {extra}</div><div class="desc">{html.escape(desc)}</div></div><label class="switch"><input type="checkbox"{checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
-      if group_name == "주행":
-        reverse_checked = " checked" if reverse_driver_camera_enabled() else ""
-        rows.append(f'''<form method="post" action="/reverse-camera/toggle"><div class="row"><div><div class="title">후진 시 실내 카메라 전환</div><div class="desc">R단에 들어가면 주행 화면 대신 실내 운전자 카메라를 표시하고 R단 해제 시 원래 화면으로 돌아갑니다.</div></div><label class="switch"><input type="checkbox"{reverse_checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
+    if group_name == "주행":
+      reverse_checked = " checked" if reverse_driver_camera_enabled() else ""
+      rows.append(f'''<form method="post" action="/reverse-camera/toggle"><div class="row"><div><div class="title">후진 시 실내 카메라 전환</div><div class="desc">R단에 들어가면 주행 화면 대신 실내 운전자 카메라를 표시하고 R단 해제 시 원래 화면으로 돌아갑니다.</div></div><label class="switch"><input type="checkbox"{reverse_checked} onchange="this.form.submit()"><span class="slider"></span></label></div></form>''')
     sections.append(f'<div class="section-title">{html.escape(group_name)}</div><div class="card">{"".join(rows)}</div>')
 
   try:
