@@ -76,13 +76,11 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
 
 
 def diagnostic_page(message: str = "") -> str:
-  page = diagnostics_v2.enhance_diagnostic_page(_original_diagnostic_page(message))
-  page = page.replace(
-    "버튼을 누른 뒤 8초 동안 크루즈·Panda 안전 상태와 SCC/FCA/레이더 CAN을 시간순으로 기록합니다. 읽기 전용이며 차량 제어에는 관여하지 않습니다.",
-    "버튼 한 번으로 계기판 경고 원인 후보·차량 인식·card·carState·운전자 감시·runtime guard·레이더·SCC/FCA·Panda fault 이름·순정 SCC 복구·오류를 8초 동안 모아 한눈에 보는 요약과 전체 원문을 파일 하나에 저장합니다. P단 정지에서 정상인 기어·안전벨트·주차브레이크 진입 차단은 ADAS 고장으로 판정하지 않습니다. 읽기 전용이며 차량 제어에는 관여하지 않습니다.",
-  ).replace("8초 진단 파일 받기", "8초 통합진단 파일 하나 받기")
-  return carrot_ui.enhance_legacy_page(core, page, "diagnostics")
-
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 8초 통합진단</title><style>{carrot_ui._css(core)}</style></head><body><main>
+  <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>8초 통합진단</h1><div class="mini">차량 상태와 주요 오류를 8초 동안 읽기 전용으로 수집합니다.</div></div>
+  {carrot_ui._message(message)}
+  <div class="card"><div class="title">통합진단 파일</div><div class="desc">P단 정지 상태에서 실행하면 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태와 오류를 파일 하나로 저장합니다. 차량 제어에는 관여하지 않습니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form></div>
+  {carrot_ui._nav("diagnostics")}</main></body></html>'''
 
 def live_page() -> str:
   return carrot_ui.enhance_legacy_page(core, _original_live_page(), "camera")
