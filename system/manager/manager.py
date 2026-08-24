@@ -175,13 +175,8 @@ def manager_thread() -> None:
         now = time.monotonic()
         if safe_stop and now - selfdrived_restart_at >= SELFDRIVED_SAFE_RESTART_COOLDOWN:
           cloudlog.error(
-            "Restarting crashed selfdrived at safe stop",
-            extra={
-              "vEgo": float(cs.vEgo),
-              "gear": str(cs.gearShifter),
-              "brakePressed": bool(cs.brakePressed),
-              "cruiseEnabled": bool(cs.cruiseState.enabled),
-            },
+            f"Restarting crashed selfdrived at safe stop: vEgo={float(cs.vEgo):.3f} "
+            f"gear={cs.gearShifter} brakePressed={bool(cs.brakePressed)} cruiseEnabled={bool(cs.cruiseState.enabled)}"
           )
           selfdrived.restart()
           selfdrived_restart_at = now
