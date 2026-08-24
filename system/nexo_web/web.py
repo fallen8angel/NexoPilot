@@ -31,6 +31,11 @@ from urllib.parse import parse_qs, urlparse
 
 from cereal import car, messaging
 from openpilot.common.params import Params
+from openpilot.selfdrive.selfdrived.nexo_experimental_mode import (
+  SWITCH_SPEED_STEP_KPH,
+  load_settings as load_nexo_experimental_speed_settings,
+  save_settings as save_nexo_experimental_speed_settings,
+)
 from system.nexo_web import nexo_cluster_warning_diagnostics as warning_diagnostics
 from system.nexo_web import nexo_cluster_warning_policy as warning_policy
 from system.nexo_web import nexo_ai_parity_diagnostics as ai_parity_diagnostics
@@ -276,6 +281,49 @@ class CarrotStyleHandler(_original_handler):
       action = device_ui.DEVICE_ACTIONS[parsed.path]
       ok, result = device_ui.perform_device_action(action)
       self._redirect(result, "/device")
+      return
+
+    if parsed.path == "/experimental-speed-switch/toggle":
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      if not self._require_parked("/settings"):
+        return
+      if self._read_small_form() is None:
+        return
+      try:
+        settings = load_nexo_experimental_speed_settings()
+        updated = save_nexo_experimental_speed_settings(not settings.enabled, settings.speed_kph)
+      except Exception as error:
+        self._redirect(f"실험 모드 속도 전환 설정 저장 실패: {error}", "/settings")
+        return
+      self._redirect("목표 속도 도달 시 일반 모드 전환을 활성화했습니다." if updated.enabled else "목표 속도 도달 시 일반 모드 전환을 비활성화했습니다.", "/settings")
+      return
+
+    if parsed.path == "/experimental-speed-switch/speed":
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      if not self._require_parked("/settings"):
+        return
+      values = self._read_small_form()
+      if values is None:
+        return
+      try:
+        delta = int(values.get("delta", ["0"])[0])
+      except ValueError:
+        self._send("잘못된 속도 조절 값", HTTPStatus.BAD_REQUEST)
+        return
+      if delta not in (-SWITCH_SPEED_STEP_KPH, SWITCH_SPEED_STEP_KPH):
+        self._send("허용되지 않은 속도 조절 값", HTTPStatus.BAD_REQUEST)
+        return
+      try:
+        settings = load_nexo_experimental_speed_settings()
+        updated = save_nexo_experimental_speed_settings(settings.enabled, settings.speed_kph + delta)
+      except Exception as error:
+        self._redirect(f"실험 모드 전환 속도 저장 실패: {error}", "/settings")
+        return
+      self._redirect(f"실험 모드 전환 기준 속도를 {updated.speed_kph}km/h로 저장했습니다.", "/settings")
       return
 
     if parsed.path == "/reverse-camera/toggle":
