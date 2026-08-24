@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import subprocess
 import time
+from pathlib import Path
 
 import cereal.messaging as messaging
 
 
 SERVICES = ("carState", "selfdriveState", "driverMonitoringState", "longitudinalPlan", "carControl", "pandaStates")
+SELFDRIVED_CRASH_LOG = Path("/data/nexopilot/selfdrived_crash.log")
 
 
 def process_running(pattern: str) -> tuple[bool, str]:
@@ -18,6 +20,14 @@ def process_running(pattern: str) -> tuple[bool, str]:
     if pattern in line and "check_nexo_selfdrived_runtime.py" not in line:
       return True, line.strip()
   return False, ""
+
+
+def crash_tail() -> str:
+  try:
+    lines = SELFDRIVED_CRASH_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(lines[-30:])
+  except OSError:
+    return "저장된 selfdrived crash traceback이 없습니다."
 
 
 def main() -> None:
@@ -56,6 +66,11 @@ def main() -> None:
     print("판정: [주의] 핵심 런타임 서비스 중 유효하지 않은 항목이 있습니다.")
   else:
     print("판정: [정상 후보] selfdrived와 핵심 상태 메시지가 정상적으로 관측됩니다.")
+
+  if failed:
+    print("\n[최근 selfdrived crash traceback]")
+    print(crash_tail())
+    print("\n※ selfdrived 자동 복구는 0km/h + 크루즈 비활성 + Panda controlsAllowed=False + P단 또는 브레이크 유지 상태에서만 허용됩니다.")
 
   raise SystemExit(1 if failed else 0)
 
