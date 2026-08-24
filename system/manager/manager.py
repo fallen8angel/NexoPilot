@@ -6,7 +6,7 @@ import sys
 import time
 import traceback
 
-from cereal import log
+from cereal import car, log
 import cereal.messaging as messaging
 import openpilot.system.sentry as sentry
 from openpilot.common.utils import atomic_write
@@ -20,6 +20,9 @@ from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_I
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware.hw import Paths
+
+
+SELFDRIVED_SAFE_RESTART_COOLDOWN = 10.0
 
 
 def manager_init() -> None:
@@ -123,7 +126,7 @@ def manager_thread() -> None:
     ignore.append("pandad")
   ignore += [x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0]
 
-  sm = messaging.SubMaster(['deviceState', 'carParams', 'pandaStates'], poll='deviceState')
+  sm = messaging.SubMaster(['deviceState', 'carParams', 'pandaStates', 'carState'], poll='deviceState')
   pm = messaging.PubMaster(['managerState'])
 
   write_onroad_params(False, params)
@@ -131,6 +134,7 @@ def manager_thread() -> None:
 
   started_prev = False
   ignition_prev = False
+  selfdrived_restart_at = 0.0
 
   while True:
     sm.update(1000)
@@ -152,6 +156,35 @@ def manager_thread() -> None:
 
     started_prev = started
     ignition_prev = ignition
+
+    # NEXO recovery policy: a crashed selfdrived used to leave a dead Process
+    # object behind for the rest of the onroad cycle. That keeps selfdriveState
+    # permanently absent and the UI shows "openpilot unavailable" until a reboot.
+    # Recover only at a fail-safe stop: valid carState, zero speed, stock cruise
+    # disabled, Panda controls disallowed, and either P or the brake held.
+    selfdrived = managed_processes.get("selfdrived")
+    if (started and "selfdrived" not in ignore and selfdrived is not None and
+        selfdrived.proc is not None and not selfdrived.proc.is_alive() and not selfdrived.shutting_down):
+      cs_ready = bool(sm.seen['carState']) and bool(sm.valid['carState'])
+      panda_ready = bool(sm.seen['pandaStates']) and bool(sm.valid['pandaStates']) and len(sm['pandaStates']) > 0
+      if cs_ready and panda_ready:
+        cs = sm['carState']
+        panda_safe = all(not ps.controlsAllowed for ps in sm['pandaStates'])
+        held_safe = cs.gearShifter == car.CarState.GearShifter.park or bool(cs.brakePressed)
+        safe_stop = abs(float(cs.vEgo)) < 0.05 and not bool(cs.cruiseState.enabled) and panda_safe and held_safe
+        now = time.monotonic()
+        if safe_stop and now - selfdrived_restart_at >= SELFDRIVED_SAFE_RESTART_COOLDOWN:
+          cloudlog.error(
+            "Restarting crashed selfdrived at safe stop",
+            extra={
+              "vEgo": float(cs.vEgo),
+              "gear": str(cs.gearShifter),
+              "brakePressed": bool(cs.brakePressed),
+              "cruiseEnabled": bool(cs.cruiseState.enabled),
+            },
+          )
+          selfdrived.restart()
+          selfdrived_restart_at = now
 
     ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore)
 
