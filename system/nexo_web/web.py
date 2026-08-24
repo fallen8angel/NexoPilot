@@ -184,6 +184,9 @@ class CarrotStyleHandler(_original_handler):
     if parsed.path == "/api/status":
       self._send_json(carrot_ui.status_json(core))
       return
+    if parsed.path == "/api/update-status":
+      self._send_json(core.update_status_json())
+      return
     if parsed.path == "/api/hud":
       self._send_json(hud_ui.hud_status_json(core))
       return
@@ -332,6 +335,7 @@ def main() -> None:
   core.restore_web_camera()
   threading.Thread(target=core.camera_watchdog, daemon=True).start()
   threading.Thread(target=core.model_monitor, daemon=True).start()
+  threading.Thread(target=core.update_monitor, daemon=True).start()
   print(f"NexoPilot web: http://<device-ip>:{core.PORT}")
 
   last_error = None
