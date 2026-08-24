@@ -50,6 +50,9 @@ class Spinner(Widget):
       self._wrapped_lines = wrap_text(text, FONT_SIZE, gui_app.width - MARGIN_H)
 
   def _render(self, rect: rl.Rectangle):
+    # Fully cover the previous AGNOS/comma splash before drawing NEXO artwork.
+    rl.clear_background(rl.BLACK)
+
     if self._wrapped_lines:
       # Calculate total height required for spinner and text
       spacing = WRAPPED_SPACING
