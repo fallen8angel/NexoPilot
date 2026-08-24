@@ -3,9 +3,11 @@ import os
 import signal
 import time
 import subprocess
+import traceback
 from collections.abc import Callable, ValuesView
 from abc import ABC, abstractmethod
 from multiprocessing import Process
+from pathlib import Path
 
 from setproctitle import setproctitle
 
@@ -15,6 +17,24 @@ import openpilot.system.sentry as sentry
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+
+
+NEXO_CRASH_DIR = Path("/data/nexopilot")
+
+
+def _save_nexo_python_crash(name: str, proc: str) -> None:
+  """Persist the latest NEXO core Python traceback before the child exits."""
+  if name not in ("selfdrived", "card", "controlsd", "dmonitoringd", "plannerd"):
+    return
+  try:
+    NEXO_CRASH_DIR.mkdir(parents=True, exist_ok=True)
+    (NEXO_CRASH_DIR / f"{name}_crash.log").write_text(
+      f"time={time.time():.3f}\nprocess={name}\nmodule={proc}\n{traceback.format_exc()}",
+      encoding="utf-8",
+    )
+  except Exception:
+    # Crash logging must never mask or change the original process failure.
+    pass
 
 
 def launcher(proc: str, name: str) -> None:
@@ -37,6 +57,9 @@ def launcher(proc: str, name: str) -> None:
   except KeyboardInterrupt:
     cloudlog.warning(f"child {proc} got SIGINT")
   except Exception:
+    # Keep the exact traceback locally so a later 8-second diagnostic can prove
+    # why selfdriveState disappeared even after tmux has scrolled past the crash.
+    _save_nexo_python_crash(name, proc)
     # can't install the crash handler because sys.excepthook doesn't play nice
     # with threads, so catch it here.
     sentry.capture_exception()
@@ -45,7 +68,6 @@ def launcher(proc: str, name: str) -> None:
 
 def nativelauncher(pargs: list[str], cwd: str, name: str) -> None:
   os.environ['MANAGER_DAEMON'] = name
-
   # exec the process
   os.chdir(cwd)
   os.execvp(pargs[0], pargs)
@@ -227,7 +249,6 @@ class DaemonProcess(ManagerProcess):
         os.kill(int(pid), 0)
         with open(f'/proc/{pid}/cmdline') as f:
           if self.module in f.read():
-            # daemon is running
             return
       except (OSError, FileNotFoundError):
         # process is dead
