@@ -137,7 +137,7 @@ required_web = (
   "remote_ui.remote_page(core)",
   "stationary_gate",
   "core.TOGGLES = list(carrot_ui.TOGGLES)",
-  'server_version = "NexoPilotWeb/7.7"',
+  'server_version = "NexoPilotWeb/7.8"',
   'Params().put("LongitudinalPersonality", personality)',
 )
 for token in required_web:
