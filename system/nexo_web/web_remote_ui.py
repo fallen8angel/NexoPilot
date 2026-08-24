@@ -6,19 +6,16 @@ import html
 NAV_ITEMS = (
   ("home", "/", "홈"),
   ("settings", "/settings", "설정"),
-  ("camera", "/live", "카메라"),
-  ("hud", "/hud", "HUD"),
   ("diagnostics", "/diagnostics", "진단"),
   ("device", "/device", "내 디바이스"),
-  ("remote", "/remote", "원격"),
 )
 
 
 def wide_nav_css() -> str:
   """Keep phone/PC navigation at the bottom, but use a Carrot-style left rail on wide landscape displays."""
   return """
-/* Seven-item NexoPilot navigation. Narrow screens keep the bottom bar. */
-.nav{grid-template-columns:repeat(7,1fr)}
+/* Four-item NexoPilot navigation. Narrow screens keep the bottom bar. */
+.nav{grid-template-columns:repeat(4,1fr)}
 
 /* NEXO 12.8-inch navigation/display class: wide landscape layout. */
 @media (min-width:900px) and (orientation:landscape){
@@ -39,7 +36,7 @@ def wide_nav_css() -> str:
     width:92px!important;
     display:grid!important;
     grid-template-columns:1fr!important;
-    grid-template-rows:repeat(7,minmax(0,1fr))!important;
+    grid-template-rows:repeat(4,minmax(0,1fr))!important;
     gap:5px!important;
     padding:7px!important;
     border-radius:22px!important;
@@ -90,7 +87,7 @@ def install(carrot_ui) -> None:
 
 def remote_page(core) -> str:
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 원격</title><style>{core.base_css()}
-:root{{color-scheme:dark}}body{{background:#080a0d}}main{{max-width:940px;margin:auto;padding:18px 18px 94px}}.hero{{padding:22px;border-radius:24px;background:#191d22;border:1px solid #2d333b;margin:14px 0}}.hero h1{{margin:0;font-size:30px}}.eyebrow{{font-size:12px;color:#8b949e;letter-spacing:.08em}}.status{{display:flex;align-items:center;gap:12px;margin-top:18px}}.dot{{width:14px;height:14px;border-radius:50%;background:#8b949e}}.status-label{{font-size:22px;font-weight:800}}.mini{{font-size:12px;color:#8b949e;line-height:1.55}}.nav{{position:fixed;z-index:50;left:50%;bottom:10px;transform:translateX(-50%);width:min(900px,calc(100% - 22px));display:grid;grid-template-columns:repeat(7,1fr);gap:5px;background:#15191ef2;border:1px solid #30363d;border-radius:20px;padding:7px;backdrop-filter:blur(18px)}}.nav a{{color:#8b949e;text-align:center;padding:11px 3px;border-radius:14px;font-size:12px;font-weight:700;text-decoration:none}}.nav a.active{{background:#2b3139;color:white}}@media(max-width:620px){{.nav a{{font-size:9px}}.hero h1{{font-size:26px}}}}
+:root{{color-scheme:dark}}body{{background:#080a0d}}main{{max-width:940px;margin:auto;padding:18px 18px 94px}}.hero{{padding:22px;border-radius:24px;background:#191d22;border:1px solid #2d333b;margin:14px 0}}.hero h1{{margin:0;font-size:30px}}.eyebrow{{font-size:12px;color:#8b949e;letter-spacing:.08em}}.status{{display:flex;align-items:center;gap:12px;margin-top:18px}}.dot{{width:14px;height:14px;border-radius:50%;background:#8b949e}}.status-label{{font-size:22px;font-weight:800}}.mini{{font-size:12px;color:#8b949e;line-height:1.55}}.nav{{position:fixed;z-index:50;left:50%;bottom:10px;transform:translateX(-50%);width:min(900px,calc(100% - 22px));display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#15191ef2;border:1px solid #30363d;border-radius:20px;padding:7px;backdrop-filter:blur(18px)}}.nav a{{color:#8b949e;text-align:center;padding:11px 3px;border-radius:14px;font-size:12px;font-weight:700;text-decoration:none}}.nav a.active{{background:#2b3139;color:white}}@media(max-width:620px){{.nav a{{font-size:9px}}.hero h1{{font-size:26px}}}}
 {wide_nav_css()}
 </style></head><body><main>
   <div class="hero"><div class="eyebrow">NEXOPILOT · REMOTE EXPERIMENT</div><h1>원격</h1><div class="status"><span class="dot"></span><div><div class="status-label">미지원 · 업데이트 예정</div><div class="mini">원격 기능은 나중에 추가 및 실험하기 위한 메뉴 자리만 마련했습니다.</div></div></div></div>
