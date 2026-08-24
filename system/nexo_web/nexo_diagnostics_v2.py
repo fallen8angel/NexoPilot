@@ -184,7 +184,7 @@ def _flow_lines(requested: Counter[int], counts: Counter[tuple[int, int]]) -> li
 def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
   started = time.monotonic()
   wall_time = datetime.now().astimezone().isoformat(timespec="seconds")
-  sm = messaging.SubMaster(["carState", "selfdriveState", "pandaStates", "radarState"])
+  sm = messaging.SubMaster(["carState", "selfdriveState", "carControl", "pandaStates", "radarState"])
   can_sock = messaging.sub_sock("can", timeout=20)
   sendcan_sock = messaging.sub_sock("sendcan", timeout=20)
   requested: Counter[int] = Counter()
@@ -208,6 +208,7 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     try:
       cs = sm["carState"]
       ss = sm["selfdriveState"]
+      cc = sm["carControl"]
       pandas = sm["pandaStates"]
       radar = sm["radarState"]
       lead = radar.leadOne
@@ -223,6 +224,10 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
         bool(errors.canError), bool(errors.radarFault), bool(errors.wrongConfig), bool(errors.radarUnavailableTemporary),
         bool(lead.status), float(lead.dRel), float(lead.vRel), float(lead.aRel),
         str(ss.alertText1), str(ss.alertText2),
+        bool(ss.experimentalMode), str(ss.personality),
+        bool(cc.enabled), bool(cc.latActive), bool(cc.longActive),
+        str(cc.actuators.longControlState), float(cc.actuators.accel),
+        tuple(f"{button.type}:{'down' if button.pressed else 'up'}" for button in cs.buttonEvents),
       )
       if snapshot != previous:
         elapsed = time.monotonic() - started
@@ -233,7 +238,10 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
           f"cruise={snapshot[4]}/{snapshot[5]} selfdrive={snapshot[6]}/{snapshot[7]}/{snapshot[8]} "
           f"controlsAllowed={snapshot[9]} safety={snapshot[10]}/{snapshot[11]} rxInvalid={snapshot[12]} "
           f"radarErrors={snapshot[13:17]} leadOne=status:{snapshot[17]} dRel:{snapshot[18]:.2f} "
-          f"vRel:{snapshot[19]:.2f} aRel:{snapshot[20]:.2f} alert={snapshot[21]!r} {snapshot[22]!r}"
+          f"vRel:{snapshot[19]:.2f} aRel:{snapshot[20]:.2f} alert={snapshot[21]!r} {snapshot[22]!r} "
+          f"experimental={snapshot[23]} personality={snapshot[24]} "
+          f"carControl=enabled:{snapshot[25]}/lat:{snapshot[26]}/long:{snapshot[27]} "
+          f"longState:{snapshot[28]} accel:{snapshot[29]:.3f} buttons={snapshot[30]}"
         )
         previous = snapshot
     except Exception as error:
