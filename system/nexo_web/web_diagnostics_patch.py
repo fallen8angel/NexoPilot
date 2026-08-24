@@ -71,7 +71,75 @@ def annotate_raw_can(output: str) -> str:
   return "\n".join(lines)
 
 
+def _sendcan_request_totals(output: str) -> tuple[int, int]:
+  """Count only real sendcan requests, not Panda CAN echo/accepted metadata."""
+  scc_requests = 0
+  fca_requests = 0
+  for match in re.finditer(
+      r"^(SCC11|SCC12|SCC13|SCC14|FCA11|FCA12|FRT_RADAR11)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$",
+      output,
+      re.MULTILINE,
+  ):
+    name = match.group(1)
+    requested = int(match.group(2))
+    if name.startswith("SCC"):
+      scc_requests += requested
+    elif name.startswith("FCA"):
+      fca_requests += requested
+  return scc_requests, fca_requests
+
+
+def _metric(output: str, pattern: str) -> int:
+  match = re.search(pattern, output)
+  return int(match.group(1)) if match else 0
+
+
+def _correct_tx_echo_verdict(output: str) -> str:
+  """Do not mistake Panda accepted/echo frames for openpilot control requests.
+
+  src=128~191 can be present even when the sendcan subscriber observed zero
+  SCC/FCA requests. The request stream is therefore the authoritative signal
+  for whether openpilot actually attempted SCC/FCA control in this diagnostic.
+  """
+  scc_requests, fca_requests = _sendcan_request_totals(output)
+  stock_scc = _metric(output, r"순정 SCC:\s*(\d+)")
+
+  output = re.sub(
+    r"openpilot SCC:\s*(\d+)",
+    lambda match: f"openpilot SCC: {scc_requests} | Panda 반환 echo SCC: {match.group(1)}",
+    output,
+    count=1,
+  )
+  output = re.sub(
+    r"openpilot FCA:\s*(\d+)",
+    lambda match: f"openpilot FCA: {fca_requests} | Panda 반환 echo FCA: {match.group(1)}",
+    output,
+    count=1,
+  )
+
+  if stock_scc and scc_requests:
+    verdict = "위험: 물리 source0 순정 SCC와 실제 sendcan SCC 요청이 동시에 관측됐습니다."
+  elif scc_requests:
+    verdict = "정상 후보: 물리 source0 순정 SCC 없이 실제 sendcan SCC 요청이 관측됐습니다."
+  elif stock_scc:
+    verdict = "정상: 물리 source0 순정 SCC만 관측됐고 실제 sendcan SCC 요청은 0회입니다."
+  else:
+    verdict = "정보: 물리 source0 순정 SCC와 실제 sendcan SCC 요청을 모두 관측하지 못했습니다."
+
+  output = re.sub(r"(?m)^판정: .*?$", f"판정: {verdict}", output, count=1)
+  output = output.replace(
+    "※ src=128~191은 Panda가 돌려준 openpilot TX echo/accepted이며 물리 bus=src-128입니다.",
+    "※ src=128~191은 Panda가 돌려준 accepted/echo 메타데이터입니다. 실제 openpilot SCC/FCA 송신 여부는 sendcan 요청을 우선합니다.",
+  )
+  output = output.replace(
+    "메시지        요청     성공     차단   source0수신",
+    "메시지        요청  Panda반환     차단   source0수신",
+  )
+  return output
+
+
 def annotate_blackbox(output: str) -> str:
+  output = _correct_tx_echo_verdict(output)
   active = bool(re.search(r"selfdrive=[^\n]*/True(?:/|\s)", output))
   allowed = "controlsAllowed=True" in output
   verdict = (
