@@ -414,6 +414,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     problems.append("실제 제어 활성 중 SCC Panda 차단 관측")
   if not live_comm_ok:
     warnings.append("현재 핵심 서비스 통신 이상: " + "; ".join(live_comm_bad))
+  if experimental_param is not None and not experimental_match:
+    warnings.append(f"실험 모드 설정과 실제 상태 불일치: param={experimental_param}, live={experimental_live}")
 
   # Missing legacy heartbeat Params is informational when the live card process
   # and a fresh, valid carState already prove the card loop is healthy.
@@ -443,8 +445,9 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
   restore_status = _label("실패" if marker.get("problem") else "정상", str(marker.get("description")))
   comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk (2초 warm-up 완료)" if live_comm_ok else "; ".join(live_comm_bad))
+  experimental_level = "정상" if experimental_param is True and experimental_live is True else ("정보" if experimental_param is False and experimental_live is False else "주의")
   experimental_status = _label(
-    "정상" if experimental_match else "주의",
+    experimental_level,
     f"설정={_yes_no(experimental_param)}, 실제 selfdriveState={_yes_no(experimental_live)}, "
     f"CarControl enabled/lat/long={cc_info.get('enabled')}/{cc_info.get('latActive')}/{cc_info.get('longActive')}",
   )
