@@ -203,9 +203,21 @@ class CarrotStyleHandler(_original_handler):
   def do_POST(self) -> None:
     parsed = urlparse(self.path)
 
-    # Executable-code updates and real device actions keep the stricter EPB gate.
+    # Software updates use the normal parked gate: P, fully stopped, cruise and
+    # openpilot inactive. Physical device actions still require the stricter EPB gate.
+    if parsed.path == "/update":
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      if not self._require_parked("/device"):
+        return
+      ok, result = core.perform_update()
+      if ok:
+        result = f"{result} 업데이트를 설치했습니다. 새 코드는 다음 재부팅부터 적용됩니다."
+      self._redirect(result, "/device")
+      return
+
     safe_redirects = {
-      "/update": "/device",
       "/settings/reboot": "/settings",
       "/device/reboot": "/device",
       "/device/poweroff": "/device",
