@@ -97,7 +97,10 @@ void hyundai_common_cruise_state_check(const bool cruise_engaged) {
 }
 
 void hyundai_common_cruise_buttons_check(const int cruise_button, const bool main_button) {
-  const bool nexo_med = hyundai_longitudinal && hyundai_fcev_gas_signal && hyundai_nexo_dynamic_scc;
+  // First-generation NEXO uses the normal Hyundai LONG safety path (LONG|FCEV,
+  // safetyParam 260). MED must therefore be keyed from LONG+FCEV itself and not
+  // from the separate dynamic-SCC forwarding flag, which intentionally remains off.
+  const bool nexo_med = hyundai_longitudinal && hyundai_fcev_gas_signal;
   const bool main_pressed = main_button && !hyundai_main_button_prev;
 
   if (main_pressed && nexo_med) {
