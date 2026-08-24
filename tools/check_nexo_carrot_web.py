@@ -88,11 +88,16 @@ for forbidden_hud in (
   if forbidden_hud in hud:
     raise SystemExit(f"HUD unexpectedly contains a vehicle-control action: {forbidden_hud}")
 
+# The visible navigation was intentionally reduced to the four supported pages.
+# Keep the remote page implementation as a read-only placeholder even though it
+# is no longer exposed as a primary navigation item.
 required_remote = (
-  '("hud", "/hud", "HUD")',
-  '("remote", "/remote", "원격")',
-  "grid-template-columns:repeat(7,1fr)",
-  "grid-template-rows:repeat(7,minmax(0,1fr))",
+  '("home", "/", "홈")',
+  '("settings", "/settings", "설정")',
+  '("diagnostics", "/diagnostics", "진단")',
+  '("device", "/device", "내 디바이스")',
+  "grid-template-columns:repeat(4,minmax(0,1fr))",
+  "grid-template-rows:repeat(4,minmax(0,1fr))",
   "미지원 · 업데이트 예정",
   "원격 제어",
   "원격 주차·이동",
@@ -181,4 +186,4 @@ for forbidden_action in (
   if forbidden_action in ui or forbidden_action in web or forbidden_action in remote or forbidden_action in hud:
     raise SystemExit(f"web UI must not modify/special-case Panda safety: {forbidden_action}")
 
-print("NEXO Carrot-style port 7000 UI PASS (typed personality + 12.8-inch read-only HUD + Remote placeholder included)")
+print("NEXO Carrot-style port 7000 UI PASS (typed personality + read-only HUD + safe Remote placeholder included)")
