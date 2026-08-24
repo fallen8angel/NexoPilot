@@ -116,7 +116,7 @@ def main() -> None:
   require("warning_diagnostics.prepend_cluster_warning_report" in entry, "cluster warning report not wired")
   require("warning_policy.correct_stationary_cluster_warning" in entry, "park warning policy not wired")
   require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
-  require("NexoPilotWeb/7.7" in entry, "port 7000 server version not advanced for AI parity diagnostics")
+  require("NexoPilotWeb/7.8" in entry, "port 7000 server version not advanced for current diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
