@@ -50,7 +50,11 @@ def main() -> None:
     "restore_allowed_unlocked",
     "current_process_owns",
     "clear_owner_if_current_unlocked",
+    "release_owner_on_failure",
     "RESTORE SKIP",
+    "RESTORE HANDOFF",
+    "retries = 6 if current_owner else 3",
+    "release_owner_on_failure=True",
     "DEINIT no active NEXO takeover; duplicate restore skipped",
   ):
     require(token in interface, f"owner-aware stock SCC restore contract missing: {token}")
@@ -101,7 +105,7 @@ def main() -> None:
   require("순정 SCC 복구 대기 마커" in web, "restore marker is not visible in port 7000")
   require("NEXO_SCC_RESTORE_LOG" in web, "restore attempts are not visible in port 7000")
   require("자동 재부팅 없이 저장됩니다" in web, "no-auto-reboot policy is not visible in diagnostics")
-  print("NEXO owner-aware SCC crash recovery and no-auto-reboot policy PASS")
+  print("NEXO owner-aware SCC crash recovery and owner handoff policy PASS")
 
 
 if __name__ == "__main__":
