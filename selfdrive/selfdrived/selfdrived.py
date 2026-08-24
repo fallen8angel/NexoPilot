@@ -18,11 +18,6 @@ from openpilot.selfdrive.car.car_specific import CarSpecificEvents
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
-from openpilot.selfdrive.selfdrived.nexo_experimental_mode import (
-  DEFAULT_SWITCH_SPEED_KPH,
-  NexoExperimentalModeController,
-  load_settings as load_nexo_experimental_speed_settings,
-)
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 
@@ -125,13 +120,6 @@ class SelfdriveD:
     self.logged_comm_issue = None
     self.not_running_prev = None
     self.experimental_mode = False
-    self.experimental_mode_param = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
-    self.nexo_experimental_speed_controller = NexoExperimentalModeController()
-    self.nexo_experimental_speed_enabled = False
-    self.nexo_experimental_switch_speed_kph = DEFAULT_SWITCH_SPEED_KPH
-    self.nexo_experimental_settings_read_at = 0.0
-    fingerprint_name = getattr(self.CP.carFingerprint, "name", "") or str(self.CP.carFingerprint).split(".")[-1]
-    self.nexo_experimental_speed_mode = fingerprint_name == "HYUNDAI_NEXO_1ST_GEN"
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
     self.recalibrating_seen = False
     self.dm_lockout_set = False
@@ -530,22 +518,8 @@ class SelfdriveD:
       self.pm.send('onroadEvents', ce_send)
     self.events_prev = self.events.names.copy()
 
-  def _update_nexo_experimental_mode(self, CS) -> None:
-    if not self.nexo_experimental_speed_mode or not self.CP.openpilotLongitudinalControl:
-      self.experimental_mode = self.experimental_mode_param
-      return
-    self.experimental_mode = self.nexo_experimental_speed_controller.update(
-      self.nexo_experimental_speed_enabled,
-      bool(CS.cruiseState.enabled),
-      bool(CS.cruiseState.available),
-      max(0.0, float(CS.vEgo) * 3.6),
-      self.experimental_mode_param,
-      self.nexo_experimental_switch_speed_kph,
-    )
-
   def step(self):
     CS = self.data_sample()
-    self._update_nexo_experimental_mode(CS)
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
@@ -560,15 +534,7 @@ class SelfdriveD:
       self.is_metric = self.params.get_bool("IsMetric")
       self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
-      self.experimental_mode_param = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
-      if not self.nexo_experimental_speed_mode:
-        self.experimental_mode = self.experimental_mode_param
-      now = time.monotonic()
-      if now - self.nexo_experimental_settings_read_at >= 1.0:
-        settings = load_nexo_experimental_speed_settings()
-        self.nexo_experimental_speed_enabled = settings.enabled
-        self.nexo_experimental_switch_speed_kph = settings.speed_kph
-        self.nexo_experimental_settings_read_at = now
+      self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
       time.sleep(0.1)
 
