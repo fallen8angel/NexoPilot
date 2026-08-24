@@ -130,10 +130,8 @@ class SelfdriveD:
     self.nexo_experimental_speed_enabled = False
     self.nexo_experimental_switch_speed_kph = DEFAULT_SWITCH_SPEED_KPH
     self.nexo_experimental_settings_read_at = 0.0
-    self.nexo_experimental_speed_mode = self.CP.carFingerprint == car.CarParams.CarFingerprint.hyundaiNexo1stGen if hasattr(car.CarParams, "CarFingerprint") else str(self.CP.carFingerprint).endswith("HYUNDAI_NEXO_1ST_GEN")
-    # Cap'n Proto fingerprints are strings on this branch. Keep the explicit
-    # fallback above for tests and future schema variants.
-    self.nexo_experimental_speed_mode = self.nexo_experimental_speed_mode or str(self.CP.carFingerprint).endswith("HYUNDAI_NEXO_1ST_GEN")
+    fingerprint_name = getattr(self.CP.carFingerprint, "name", "") or str(self.CP.carFingerprint).split(".")[-1]
+    self.nexo_experimental_speed_mode = fingerprint_name == "HYUNDAI_NEXO_1ST_GEN"
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
     self.recalibrating_seen = False
     self.dm_lockout_set = False
