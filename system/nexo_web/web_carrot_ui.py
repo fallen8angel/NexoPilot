@@ -292,8 +292,6 @@ def dashboard_page(core, message: str = "", fetch_update: bool = False) -> str:
     <div class="metric"><div class="k">레이더</div><div class="v">{radar_text}</div></div>
     <div class="metric"><div class="k">Panda 펌웨어</div><div class="v">{html.escape(fw_text)}</div></div>
   </div>
-  <div class="card"><div class="row"><div><div class="title">Git</div><div class="desc">{html.escape(str(status['git']['branch']))} · {'Dirty' if status['git']['dirty'] else 'Clean'}</div></div><span class="value">{html.escape(str(status['git']['commit']))}</span></div><div class="row"><div><div class="title">업데이트</div><div class="desc">원격 확인은 버튼을 눌렀을 때만 수행합니다.</div></div><span class="value">{html.escape(str(update['remote']))}</span></div><a href="/?check=1"><button class="secondary">업데이트 확인</button></a></div>
-  <div class="card"><div class="title">빠른 메뉴</div><div class="desc">당근 설정 화면처럼 기능별 메뉴를 나눴습니다. 넥쏘에서 검증되지 않은 튜닝값은 노출하지 않습니다.</div><a href="/settings"><button>주행·안전 설정</button></a><a href="/diagnostics"><button class="secondary">8초 통합진단</button></a></div>
   {_nav('home')}</main></body></html>'''
 
 
