@@ -84,7 +84,7 @@ def diagnostic_page(message: str = "") -> str:
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 8초 통합진단</title><style>{carrot_ui._css(core)}</style></head><body><main>
   <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>8초 통합진단</h1><div class="mini">차량 상태와 주요 오류를 8초 동안 읽기 전용으로 수집합니다.</div></div>
   {carrot_ui._message(message)}
-  <div class="card"><div class="title">통합진단 파일</div><div class="desc">P단 정지 상태에서 실행하면 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태와 오류를 파일 하나로 저장합니다. 차량 제어에는 관여하지 않습니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form></div>
+  <div class="card"><div class="title">통합진단 파일</div><div class="desc">P단 정지 상태에서 실행하면 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태와 오류를 파일 하나로 저장합니다. 차량 제어에는 관여하지 않습니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form><form method="post" action="/diagnostics/capture"><button class="secondary">진단 다시 다운받기</button></form><div class="desc">다시 다운받기를 누르면 현재 상태를 기준으로 새로운 8초 진단을 다시 수집합니다.</div></div>
   {carrot_ui._nav("diagnostics")}</main></body></html>'''
 
 def live_page() -> str:
