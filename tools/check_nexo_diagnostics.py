@@ -118,7 +118,7 @@ def main() -> None:
   require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
   require("NexoPilotWeb/7.8" in entry, "port 7000 server version not advanced for current diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
-  require("diagnostics_v2.enhance_diagnostic_page" in entry, "last fault card not wired")
+  require("진단 다시 다운받기" in entry, "single-file diagnostic re-download button missing")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
     require(token in radar, f"radar UDS diagnostics missing: {token}")
   require("def _trace_nexo_long_init" in interface, "NEXO init trace helper missing")
