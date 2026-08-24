@@ -141,16 +141,20 @@ void hyundai_common_cruise_buttons_check(const int cruise_button, const bool mai
     }
 
     // NEXO uses two-stage CANCEL: SPEED_CONTROL -> MED_WAIT -> OFF.
-    // Other Hyundai longitudinal platforms keep the stock one-stage behavior.
+    // Treat a held CANCEL as one press. Without the edge check the 100 Hz CLU11
+    // stream can consume both stages during a single physical button hold.
     if (cruise_button == HYUNDAI_BTN_CANCEL) {
       if (nexo_med && acc_main_on) {
-        if (hyundai_fcev_med_wait) {
-          controls_allowed = false;
-          acc_main_on = false;
-          hyundai_fcev_med_wait = false;
-        } else {
-          controls_allowed = true;
-          hyundai_fcev_med_wait = true;
+        const bool cancel_pressed = cruise_button_prev != HYUNDAI_BTN_CANCEL;
+        if (cancel_pressed) {
+          if (hyundai_fcev_med_wait) {
+            controls_allowed = false;
+            acc_main_on = false;
+            hyundai_fcev_med_wait = false;
+          } else {
+            controls_allowed = true;
+            hyundai_fcev_med_wait = true;
+          }
         }
       } else {
         controls_allowed = false;
