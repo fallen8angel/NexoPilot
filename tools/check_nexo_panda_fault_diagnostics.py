@@ -41,8 +41,8 @@ for token in (
 
 for token in (
   "nexo_panda_fault_diagnostics",
-  "prepend_panda_fault_report",
-  "Panda fault 이름",
+  "panda_fault_diagnostics.prepend_panda_fault_report",
+  "final_report",
 ):
   if token not in web:
     raise SystemExit(f"Panda fault diagnostics not wired into web: {token}")
