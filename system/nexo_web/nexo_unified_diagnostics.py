@@ -20,7 +20,7 @@ PROCESS_PATTERNS = {
   "nexo_web": ("system.nexo_web.web", "nexo_web/web.py"),
 }
 FLOW_NAMES = ("SCC11", "SCC12", "SCC13", "SCC14", "FCA11", "FCA12", "FRT_RADAR11")
-COMM_SERVICES = ("driverMonitoringState", "longitudinalPlan", "driverAssistance")
+COMM_SERVICES = ("carControl", "driverMonitoringState", "longitudinalPlan", "driverAssistance")
 REAL_ERROR = re.compile(
   r"(unknownkeyname|traceback|exception|fatal|bus off|relay malfunction|commissue|"
   r"radar[^\n]*(?:fault|error|unavailable)|safety[^\n]*(?:invalid|fault|violation)|"
@@ -37,6 +37,13 @@ def _text_param(core, key: str) -> str:
     return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
   except Exception:
     return ""
+
+
+def _bool_param(core, key: str) -> bool | None:
+  try:
+    return bool(core.Params().get_bool(key))
+  except Exception:
+    return None
 
 
 def _safe_attr(obj, name: str, default="확인 불가"):
@@ -204,6 +211,7 @@ def _service_snapshot() -> dict[str, dict[str, object]]:
 
     cs = sm["carState"]
     ss = sm["selfdriveState"]
+    cc = sm["carControl"]
     pandas = sm["pandaStates"]
     radar = sm["radarState"]
     panda = pandas[0] if len(pandas) else None
@@ -222,6 +230,15 @@ def _service_snapshot() -> dict[str, dict[str, object]]:
       "active": bool(ss.active),
       "alert1": str(ss.alertText1),
       "alert2": str(ss.alertText2),
+      "experimentalMode": bool(ss.experimentalMode),
+      "personality": str(ss.personality),
+    })
+    result["carControl"].update({
+      "enabled": bool(cc.enabled),
+      "latActive": bool(cc.latActive),
+      "longActive": bool(cc.longActive),
+      "longControlState": str(cc.actuators.longControlState),
+      "accel": round(float(cc.actuators.accel), 3),
     })
     result["pandaStates"].update({
       "count": len(pandas),
@@ -353,6 +370,10 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   cs_info = services.get("carState", {})
   acc_fault = bool(cs_info.get("accFaulted")) or "accFault=True" in report
   rx_invalid = services.get("pandaStates", {}).get("rxChecksInvalid") is True or "rxInvalid=True" in report
+  experimental_param = _bool_param(core, "ExperimentalMode")
+  experimental_live = services.get("selfdriveState", {}).get("experimentalMode")
+  cc_info = services.get("carControl", {})
+  experimental_match = experimental_param is not None and experimental_live is experimental_param
 
   init_section = _section(report, "롱컨 초기화·UDS 추적")
   runtime_section = _section(report, "card 런타임 상태")
@@ -422,6 +443,11 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
   restore_status = _label("실패" if marker.get("problem") else "정상", str(marker.get("description")))
   comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk (2초 warm-up 완료)" if live_comm_ok else "; ".join(live_comm_bad))
+  experimental_status = _label(
+    "정상" if experimental_match else "주의",
+    f"설정={_yes_no(experimental_param)}, 실제 selfdriveState={_yes_no(experimental_live)}, "
+    f"CarControl enabled/lat/long={cc_info.get('enabled')}/{cc_info.get('latActive')}/{cc_info.get('longActive')}",
+  )
 
   safety_configs = cp.get("safetyConfigs") or []
   safety_text = ", ".join(f"{item['model']}({item['param']})" for item in safety_configs) or "없음"
@@ -445,12 +471,14 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     f"5. Panda     : {panda_status}",
     f"6. 순정 복구 : {restore_status}",
     f"7. 현재 통신 : {comm_status}",
-    f"8. 첫 오류   : {first_error}",
+    f"8. 실험 모드 : {experimental_status}",
+    f"9. 첫 오류   : {first_error}",
     "",
     "[차량·제어 설정]",
     f"Git={core.git_value('rev-parse', '--short', 'HEAD')} | Branch={core.git_value('rev-parse', '--abbrev-ref', 'HEAD')} | Dirty={core.git_value('status', '--porcelain') != ''}",
     f"openpilotLong={_yes_no(cp.get('openpilotLongitudinalControl'))} | pcmCruise={_yes_no(cp.get('pcmCruise'))} | radarUnavailable={_yes_no(cp.get('radarUnavailable'))} | sccBus={cp.get('sccBus')} | flags={cp.get('flags')}",
     f"Safety={safety_text}",
+    f"ExperimentalMode param/live={experimental_param}/{experimental_live} | personality={services.get('selfdriveState', {}).get('personality')} | CarControl enabled/lat/long={cc_info.get('enabled')}/{cc_info.get('latActive')}/{cc_info.get('longActive')} | longState={cc_info.get('longControlState')} | accel={cc_info.get('accel')}",
     f"gear={cs_info.get('gear', '확인 불가')} | speed={cs_info.get('vEgoKph', '확인 불가')}km/h | cruise available/enabled={cs_info.get('cruiseAvailable')}/{cs_info.get('cruiseEnabled')} | brake/gas={cs_info.get('brakePressed')}/{cs_info.get('gasPressed')}",
     "",
     "[8초 CAN 흐름]",
@@ -481,6 +509,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     "carParams": cp,
     "processes": processes,
     "services": services,
+    "experimentalMode": {
+      "param": experimental_param,
+      "live": experimental_live,
+      "matches": experimental_match,
+      "carControl": cc_info,
+    },
     "liveCommOk": live_comm_ok,
     "liveCommProblems": live_comm_bad,
     "flow": flow,
