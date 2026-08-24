@@ -271,7 +271,6 @@ def dashboard_page(core, message: str = "", fetch_update: bool = False) -> str:
   radar = status["radar"]
   car_info = status["car"]
   fw = status["firmware"]
-  update = core.update_status(fetch=fetch_update)
 
   mode = "오픈파일럿 롱컨" if car_info.get("longitudinal") == "활성" else "순정 ACC / 일반 크루즈"
   safety = f"{panda.get('safetyModel','-')}({panda.get('safetyParam','-')})" if panda.get("seen") else "확인 불가"
