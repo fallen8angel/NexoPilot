@@ -72,7 +72,9 @@ class Spinner(Widget):
     rl.draw_texture_pro(self._spinner_texture, rl.Rectangle(0, 0, TEXTURE_SIZE, TEXTURE_SIZE),
                         rl.Rectangle(center.x, center.y, TEXTURE_SIZE, TEXTURE_SIZE),
                         spinner_origin, self._rotation, rl.WHITE)
-    rl.draw_texture_v(self._comma_texture, rl.Vector2(0, 0), rl.WHITE)
+    # Mici display glass is offset by the camera housing, so center the artwork in the visible panel.
+    logo_x_offset = rect.width * 0.25
+    rl.draw_texture_v(self._comma_texture, rl.Vector2(logo_x_offset, 0), rl.WHITE)
 
     # Display the progress bar or text based on user input
     if self._progress is not None:
