@@ -105,42 +105,74 @@ def schedule_web_restart(delay: float = 0.75) -> None:
   threading.Thread(target=restart, daemon=True).start()
 
 
-class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.7"
+def _parked_gate(require_parking_brake: bool = False) -> tuple[bool, str]:
+  """Verify the car is safely parked without requiring selfdriveState to exist.
 
-  def _settings_gate(self) -> tuple[bool, str]:
-    """Allow ordinary web settings in Park without requiring the EPB.
+  carState is the authoritative source for P, zero speed and stock cruise state.
+  selfdriveState and pandaStates are additional safety checks when available.
+  A missing selfdriveState while parked must not lock every web setting.
+  """
+  if not core.is_onroad():
+    return True, "오프로드"
 
-    This gate is intentionally narrower than the update/reboot gate: the car
-    must still be in P, fully stopped, with cruise and openpilot control off.
-    Missing state fails closed.
-    """
-    if not core.is_onroad():
-      return True, "오프로드"
+  try:
+    cs_sock = messaging.sub_sock("carState", conflate=True, timeout=900)
+    cs_msg = messaging.recv_one(cs_sock)
+    if cs_msg is None:
+      return False, "carState 수신 없음"
+    cs = cs_msg.carState
+    if cs.gearShifter != car.CarState.GearShifter.park:
+      return False, f"기어={carrot_ui._enum_name(cs.gearShifter)}"
+    if abs(float(cs.vEgo)) > 0.05:
+      return False, f"속도={float(cs.vEgo) * 3.6:.1f}km/h"
+    if bool(cs.cruiseState.enabled):
+      return False, "크루즈 활성 중"
+    if require_parking_brake and not bool(getattr(cs, "parkingBrake", False)):
+      return False, "주차브레이크 해제"
 
-    try:
-      cs_sock = messaging.sub_sock("carState", conflate=True, timeout=900)
-      cs_msg = messaging.recv_one(cs_sock)
-      if cs_msg is None:
-        return False, "carState 수신 없음"
-      cs = cs_msg.carState
-      if cs.gearShifter != car.CarState.GearShifter.park:
-        return False, f"기어={carrot_ui._enum_name(cs.gearShifter)}"
-      if abs(float(cs.vEgo)) > 0.05:
-        return False, f"속도={float(cs.vEgo) * 3.6:.1f}km/h"
-      if bool(cs.cruiseState.enabled):
-        return False, "크루즈 활성 중"
-
-      ss_sock = messaging.sub_sock("selfdriveState", conflate=True, timeout=700)
-      ss_msg = messaging.recv_one(ss_sock)
-      if ss_msg is None:
-        return False, "selfdriveState 수신 없음"
+    selfdrive_seen = False
+    ss_sock = messaging.sub_sock("selfdriveState", conflate=True, timeout=250)
+    ss_msg = messaging.recv_one(ss_sock)
+    if ss_msg is not None:
+      selfdrive_seen = True
       if bool(ss_msg.selfdriveState.enabled) or bool(ss_msg.selfdriveState.active):
         return False, "오픈파일럿 제어 활성 중"
-    except Exception as error:
-      return False, f"설정 가능 상태 확인 실패: {error}"
 
-    return True, "P + 0km/h + 크루즈/오픈파일럿 비활성"
+    panda_seen = False
+    panda_sock = messaging.sub_sock("pandaStates", conflate=True, timeout=250)
+    panda_msg = messaging.recv_one(panda_sock)
+    if panda_msg is not None and len(panda_msg.pandaStates):
+      panda_seen = True
+      if any(bool(panda.controlsAllowed) for panda in panda_msg.pandaStates):
+        return False, "Panda controlsAllowed 활성 중"
+
+    base = "P + 0km/h"
+    if require_parking_brake:
+      base += " + 주차브레이크"
+    base += " + 크루즈 비활성"
+    if not selfdrive_seen:
+      base += " · selfdriveState 미수신 허용"
+    if not panda_seen:
+      base += " · Panda 상태 미수신"
+    return True, base
+  except Exception as error:
+    return False, f"정지 상태 확인 실패: {error}"
+
+
+def _device_stationary_gate(_core) -> tuple[bool, str]:
+  return _parked_gate(require_parking_brake=True)
+
+
+# Device page and device-action handler use the same corrected parked gate.
+carrot_ui.stationary_gate = _device_stationary_gate
+
+
+class CarrotStyleHandler(_original_handler):
+  server_version = "NexoPilotWeb/7.8"
+
+  def _settings_gate(self) -> tuple[bool, str]:
+    """Allow ordinary settings in P at zero speed without requiring EPB."""
+    return _parked_gate(require_parking_brake=False)
 
   def _require_parked(self, path: str) -> bool:
     allowed, state = self._settings_gate()
@@ -213,8 +245,8 @@ class CarrotStyleHandler(_original_handler):
   def do_POST(self) -> None:
     parsed = urlparse(self.path)
 
-    # Software updates use the normal parked gate: P, fully stopped, cruise and
-    # openpilot inactive. Physical device actions still require the stricter EPB gate.
+    # Software updates use the normal parked gate: P, fully stopped and cruise off.
+    # Physical device actions still require the stricter EPB gate.
     if parsed.path == "/update":
       if not self._same_origin():
         self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
@@ -230,7 +262,6 @@ class CarrotStyleHandler(_original_handler):
       return
 
     safe_redirects = {
-      "/settings/reboot": "/settings",
       "/device/reboot": "/device",
       "/device/poweroff": "/device",
       "/device/recalibrate": "/device",
