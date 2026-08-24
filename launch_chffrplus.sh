@@ -77,6 +77,12 @@ function launch {
     agnos_init
   fi
 
+  # Keep the AGNOS background branded as NEXO. This is idempotent and restores
+  # the root filesystem to read-only even if installation fails.
+  if [ -f "$DIR/scripts/install_nexo_agnos_bg.sh" ]; then
+    bash "$DIR/scripts/install_nexo_agnos_bg.sh" || echo "NexoPilot: AGNOS background install failed"
+  fi
+
   # Show the NexoPilot boot artwork even on prebuilt installations where the
   # normal build spinner is skipped.
   SPINNER_PID=""
