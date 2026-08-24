@@ -7,6 +7,10 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from cereal import car, messaging
+from openpilot.selfdrive.selfdrived.nexo_experimental_mode import (
+  HYSTERESIS_KPH,
+  load_settings as load_nexo_experimental_speed_settings,
+)
 
 
 NEXO_SCC_TAKEOVER_MARKER = Path("/data/nexo_scc_takeover_active")
@@ -344,6 +348,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   heartbeat_text, heartbeat_age = _heartbeat(core)
   flow = _flow_snapshot(report)
   marker = _marker_snapshot()
+  experimental_speed_settings = load_nexo_experimental_speed_settings()
 
   stock_scc = _metric(report, r"순정 SCC:\s*(\d+)")
   op_scc = _metric(report, r"(?:openpilot SCC|Panda 송신 성공 SCC):\s*(\d+)")
@@ -482,6 +487,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     f"openpilotLong={_yes_no(cp.get('openpilotLongitudinalControl'))} | pcmCruise={_yes_no(cp.get('pcmCruise'))} | radarUnavailable={_yes_no(cp.get('radarUnavailable'))} | sccBus={cp.get('sccBus')} | flags={cp.get('flags')}",
     f"Safety={safety_text}",
     f"ExperimentalMode param/live={experimental_param}/{experimental_live} | personality={services.get('selfdriveState', {}).get('personality')} | CarControl enabled/lat/long={cc_info.get('enabled')}/{cc_info.get('latActive')}/{cc_info.get('longActive')} | longState={cc_info.get('longControlState')} | accel={cc_info.get('accel')}",
+    f"XPlus식 속도 전환: enabled={experimental_speed_settings.enabled} | 기준={experimental_speed_settings.speed_kph}km/h | 실험복귀≤{experimental_speed_settings.speed_kph - HYSTERESIS_KPH:.0f} | 일반전환≥{experimental_speed_settings.speed_kph + HYSTERESIS_KPH:.0f}",
     f"gear={cs_info.get('gear', '확인 불가')} | speed={cs_info.get('vEgoKph', '확인 불가')}km/h | cruise available/enabled={cs_info.get('cruiseAvailable')}/{cs_info.get('cruiseEnabled')} | brake/gas={cs_info.get('brakePressed')}/{cs_info.get('gasPressed')}",
     "",
     "[8초 CAN 흐름]",
@@ -517,6 +523,10 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
       "live": experimental_live,
       "matches": experimental_match,
       "carControl": cc_info,
+      "speedSwitchEnabled": experimental_speed_settings.enabled,
+      "switchSpeedKph": experimental_speed_settings.speed_kph,
+      "experimentalBelowKph": experimental_speed_settings.speed_kph - HYSTERESIS_KPH,
+      "normalAboveKph": experimental_speed_settings.speed_kph + HYSTERESIS_KPH,
     },
     "liveCommOk": live_comm_ok,
     "liveCommProblems": live_comm_bad,
