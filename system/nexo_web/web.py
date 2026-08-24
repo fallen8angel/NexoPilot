@@ -21,6 +21,7 @@ Delegated validation contract retained for the NEXO integration checker:
   MAX_REQUEST_BODY
 """
 
+import os
 import socket
 import threading
 import time
@@ -96,6 +97,14 @@ core.raw_can_diagnostic_output = raw_can_diagnostic_output
 core.longitudinal_blackbox_output = longitudinal_blackbox_output
 core.diagnostic_page = diagnostic_page
 core.live_page = live_page
+
+
+def schedule_web_restart(delay: float = 0.75) -> None:
+  """Restart only port 7000 after a successful code update."""
+  def restart() -> None:
+    time.sleep(delay)
+    os._exit(0)
+  threading.Thread(target=restart, daemon=True).start()
 
 
 class CarrotStyleHandler(_original_handler):
@@ -215,6 +224,8 @@ class CarrotStyleHandler(_original_handler):
       if ok:
         result = f"{result} 업데이트를 설치했습니다. 새 코드는 다음 재부팅부터 적용됩니다."
       self._redirect(result, "/device")
+      if ok:
+        schedule_web_restart()
       return
 
     safe_redirects = {
