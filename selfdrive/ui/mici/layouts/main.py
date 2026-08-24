@@ -119,31 +119,8 @@ class MiciMainLayout(Scroller):
     super()._render(self._rect)
 
   def _reverse_camera_enabled(self) -> bool:
-    enabled = ui_state.params.get_bool("ReverseDriverCamera")
-
-    if not self._reverse_driver_camera_migration_checked:
-      cp = ui_state.CP
-      if cp is None:
-        return enabled
-
-      fingerprint = getattr(cp, "carFingerprint", None)
-      is_nexo = getattr(fingerprint, "name", str(fingerprint)) == "HYUNDAI_NEXO_1ST_GEN"
-      self._reverse_driver_camera_migration_checked = True
-
-      # Match XPlus: enable once by default on NEXO, then respect the user's toggle forever.
-      if is_nexo and not ui_state.params.get_bool("ReverseDriverCameraNexoMigrated"):
-        ui_state.params.put_bool("ReverseDriverCamera", True)
-        ui_state.params.put_bool("ReverseDriverCameraNexoMigrated", True)
-        self._reverse_driver_camera_migration_pending = True
-        return True
-
-    if self._reverse_driver_camera_migration_pending:
-      if enabled:
-        self._reverse_driver_camera_migration_pending = False
-      else:
-        return True
-
-    return enabled
+    # The prebuilt Params module does not contain the optional reverse-camera keys.
+    return False
 
   def _handle_transitions(self):
     # Don't pop if onboarding
