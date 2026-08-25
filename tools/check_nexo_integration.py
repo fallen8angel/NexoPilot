@@ -167,17 +167,17 @@ def validate_hyundaican() -> None:
   require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
   require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
 
-  # XPlus keeps FCA11/FCA12 status traffic present after stock SCC/FCA takeover.
-  # The previous validation incorrectly required NEXO to suppress these frames,
-  # which contradicted the runtime behavior observed on the working XPlus build.
+  # Working XPlus NEXO does not synthesize FCA11/FCA12 while the NEXO SCC path
+  # is active. Lock that startup behavior so NEXO cannot create a second FCA
+  # status source during takeover; other Hyundai platforms keep their behavior.
   command_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_commands) if isinstance(node, ast.If)]
-  require(any("use_fca" in condition and "CAMERA_SCC" in condition and "not is_nexo" not in condition
+  require(any("use_fca" in condition and "CAMERA_SCC" in condition and "not is_nexo" in condition
               for condition in command_conditions),
-          "NEXO FCA11 XPlus-parity condition missing")
+          "NEXO FCA11 suppression condition missing")
 
   opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
-  require(any("CAMERA_SCC" in condition and "not is_nexo" not in condition for condition in opt_conditions),
-          "NEXO FCA12 XPlus-parity condition missing")
+  require(any("CAMERA_SCC" in condition and "not is_nexo" in condition for condition in opt_conditions),
+          "NEXO FCA12 suppression condition missing")
 
 
 def validate_controller() -> None:
