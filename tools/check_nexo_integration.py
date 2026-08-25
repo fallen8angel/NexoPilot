@@ -129,11 +129,15 @@ def validate_hyundaican() -> None:
   create_acc_opt = find_function(tree, "create_acc_opt")
   values = assignments(create_acc_commands)
 
-  # Current NEXO contract: after stock SCC takeover, SCC11 continues to
-  # advertise cruise availability while actual acceleration still requires
-  # openpilot enablement. Check the expression tree rather than source spacing.
-  require(is_name(values.get("main_mode_acc"), "cruise_available"),
-          "NEXO main mode must follow cruise_available")
+  # NEXO must not light the cluster's CRUISE main indication at boot merely
+  # because the synthetic CarState reports cruise availability. The controller
+  # passes CC.longActive as enabled for NEXO, so MainMode_ACC follows actual
+  # speed-control activity. Other Hyundai platforms retain cruise_available.
+  main_mode_acc = values.get("main_mode_acc")
+  require(isinstance(main_mode_acc, ast.IfExp), "main_mode_acc must be a conditional expression")
+  require(is_name(main_mode_acc.test, "is_nexo") and is_name(main_mode_acc.body, "enabled") and
+          is_name(main_mode_acc.orelse, "cruise_available"),
+          "NEXO main mode must follow enabled while non-NEXO follows cruise_available")
 
   acc_enabled = values.get("acc_enabled")
   require(isinstance(acc_enabled, ast.IfExp), "acc_enabled must be a conditional expression")
@@ -167,17 +171,27 @@ def validate_hyundaican() -> None:
   require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
   require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
 
-  # Working XPlus NEXO does not synthesize FCA11/FCA12 while the NEXO SCC path
-  # is active. Lock that startup behavior so NEXO cannot create a second FCA
-  # status source during takeover; other Hyundai platforms keep their behavior.
+  # Proven NEXOdriveAI behavior publishes FCA11/FCA12 after the stock SCC/FCA
+  # source is suppressed. This keeps the cluster from interpreting the missing
+  # FCA status stream as an FCA/master-warning fault.
+  nexo_fca = values.get("nexo_fca")
+  require(isinstance(nexo_fca, ast.BoolOp) and isinstance(nexo_fca.op, ast.And),
+          "NEXO FCA production gate missing")
+  require("is_nexo" in ast.unparse(nexo_fca) and "CAMERA_SCC" in ast.unparse(nexo_fca),
+          "NEXO FCA production gate must be NEXO-only and exclude CAMERA_SCC")
+
   command_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_commands) if isinstance(node, ast.If)]
-  require(any("use_fca" in condition and "CAMERA_SCC" in condition and "not is_nexo" in condition
+  require(any("use_fca or nexo_fca" in condition and "CAMERA_SCC" in condition
               for condition in command_conditions),
-          "NEXO FCA11 suppression condition missing")
+          "NEXO FCA11 production condition missing")
+  require('"FCA_Status": 0 if is_nexo else 1' in source,
+          "NEXO FCA11 must match the known-good NEXOdriveAI FCA_Status")
 
   opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
-  require(any("CAMERA_SCC" in condition and "not is_nexo" in condition for condition in opt_conditions),
-          "NEXO FCA12 suppression condition missing")
+  require(any("CAMERA_SCC" in condition and "not" in condition for condition in opt_conditions),
+          "FCA12 production must exclude CAMERA_SCC")
+  require('"FCA_USM": 0 if is_nexo else 1' in source,
+          "NEXO FCA12 must match the known-good NEXOdriveAI FCA_USM")
 
 
 def validate_controller() -> None:
