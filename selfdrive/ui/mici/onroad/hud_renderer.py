@@ -287,8 +287,9 @@ class HudRenderer(Widget):
     if self._show_wheel_critical:
       self._wheel_alpha_filter.update(255)
       self._wheel_y_filter.update(0)
-    elif self.lat_active:
-      # Keep the steering icon visible for the entire time lateral control is active.
+    elif self.lat_active or ui_state.status != UIStatus.DISENGAGED:
+      # Preserve the steering icon while control is engaged, and explicitly keep it
+      # visible whenever lateral control reports active.
       self._wheel_alpha_filter.update(255 * 0.9)
       self._wheel_y_filter.update(0)
     else:
