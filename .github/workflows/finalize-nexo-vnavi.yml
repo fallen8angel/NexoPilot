@@ -19,7 +19,9 @@ jobs:
           fetch-depth: 0
 
       - name: Finalize vNAVI integration
-        run: python .github/scripts/finalize_nexo_vnavi.py
+        run: |
+          python .github/scripts/finalize_nexo_vnavi.py
+          git checkout -- .github/workflows/nexo-validation.yml
 
       - name: Validate vNAVI contract
         run: |
@@ -31,7 +33,7 @@ jobs:
         run: |
           git config user.name "NEXO vNAVI Bot"
           git config user.email "actions@users.noreply.github.com"
-          git add common/nexo_vnavi.py opendbc_repo/opendbc/car/hyundai/carstate.py selfdrive/controls/lib/longitudinal_planner.py selfdrive/ui/onroad/hud_renderer.py tools/check_nexo_vnavi.py .github/workflows/nexo-validation.yml
+          git add common/nexo_vnavi.py opendbc_repo/opendbc/car/hyundai/carstate.py selfdrive/controls/lib/longitudinal_planner.py selfdrive/ui/onroad/hud_renderer.py tools/check_nexo_vnavi.py
           git rm .github/scripts/finalize_nexo_vnavi.py .github/workflows/finalize-nexo-vnavi.yml
           git commit -m "test(nexo): validate Carrot-style vNAVI integration"
           git push origin HEAD:NEXO
