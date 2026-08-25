@@ -27,6 +27,7 @@ class FontSizes:
   max_speed: int = 36
   set_speed: int = 112
   gear: int = 58
+  exp_badge: int = 34
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,8 @@ class Colors:
   TURN_BG = rl.Color(0, 0, 0, 150)
   GEAR_BG = rl.Color(0, 0, 0, 150)
   GEAR_BORDER = rl.Color(255, 255, 255, 75)
+  EXP_ACTIVE = rl.Color(128, 216, 166, 245)
+  EXP_BG = rl.Color(0, 0, 0, 166)
 
 
 FONT_SIZES = FontSizes()
@@ -115,6 +118,7 @@ class HudRenderer(Widget):
     self.left_blinker: bool = False
     self.right_blinker: bool = False
     self.gear_text: str = "–"
+    self.experimental_mode: bool = False
 
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
@@ -164,6 +168,8 @@ class HudRenderer(Widget):
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
+    self.experimental_mode = bool(sm['selfdriveState'].experimentalMode)
+
     if sm.recv_frame["carState"] < ui_state.started_frame:
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
@@ -206,6 +212,7 @@ class HudRenderer(Widget):
     self._torque_bar.render(rect)
     self._draw_turn_indicators(rect)
     self._draw_gear(rect)
+    self._draw_experimental_badge(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
@@ -246,6 +253,26 @@ class HudRenderer(Widget):
     rl.draw_text_ex(self._font_bold, self.gear_text,
                     rl.Vector2(x + (size - text_size.x) / 2, y + (size - text_size.y) / 2),
                     FONT_SIZES.gear, 0, COLORS.WHITE)
+
+  def _draw_experimental_badge(self, rect: rl.Rectangle) -> None:
+    """Show an XPlus-style EXP badge at the upper-right whenever Experimental Mode is active."""
+    if not self.experimental_mode:
+      return
+
+    badge_w = 112
+    badge_h = 52
+    margin = 24
+    x = rect.x + rect.width - margin - badge_w
+    y = rect.y + margin
+    badge = rl.Rectangle(x, y, badge_w, badge_h)
+    rl.draw_rectangle_rounded(badge, 0.45, 8, COLORS.EXP_BG)
+    rl.draw_rectangle_rounded_lines_ex(badge, 0.45, 8, 3, COLORS.EXP_ACTIVE)
+
+    text = "EXP"
+    text_size = measure_text_cached(self._font_semi_bold, text, FONT_SIZES.exp_badge)
+    rl.draw_text_ex(self._font_semi_bold, text,
+                    rl.Vector2(x + (badge_w - text_size.x) / 2, y + (badge_h - text_size.y) / 2),
+                    FONT_SIZES.exp_badge, 0, COLORS.EXP_ACTIVE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
