@@ -1,3 +1,4 @@
+import time
 import pyray as rl
 from enum import IntEnum
 import cereal.messaging as messaging
@@ -10,6 +11,9 @@ from openpilot.selfdrive.ui.onroad.augmented_road_view import AugmentedRoadView
 from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.layouts.onboarding import OnboardingWindow
 from openpilot.selfdrive.ui.body.layouts.onroad import BodyLayout
+
+
+STARTUP_HOME_SECONDS = 1.5
 
 
 class MainState(IntEnum):
@@ -27,6 +31,10 @@ class MainLayout(Widget):
     self._sidebar = Sidebar()
     self._current_mode = MainState.HOME
     self._prev_onroad = False
+    # Match the XPlus startup feel: always render the Home screen first, even
+    # when ignition/onroad state is already present when the UI process starts.
+    # After this short presentation window normal automatic ONROAD switching resumes.
+    self._startup_home_until = time.monotonic() + STARTUP_HOME_SECONDS
 
     # Initialize layouts
     self._home_layout = HomeLayout()
@@ -65,15 +73,20 @@ class MainLayout(Widget):
     ui_state.add_on_body_changed_callbacks(self._on_body_changed)
 
   def _update_layout_rects(self):
-    self._sidebar_rect = rl.Rectangle(self._rect.x, self._rect.y, SIDEBAR_WIDTH, self._rect.height)
+    self._sidebar_rect = rl.Rectangle(0, 0, SIDEBAR_WIDTH, self._rect.height)
 
     x_offset = SIDEBAR_WIDTH if self._sidebar.is_visible else 0
     self._content_rect = rl.Rectangle(self._rect.x + x_offset, self._rect.y, self._rect.width - x_offset, self._rect.height)
 
   def _handle_onroad_transition(self):
+    if time.monotonic() < self._startup_home_until:
+      if self._current_mode != MainState.HOME:
+        self._set_current_layout(MainState.HOME)
+      self._sidebar.set_visible(True)
+      return
+
     if ui_state.started != self._prev_onroad:
       self._prev_onroad = ui_state.started
-
       self._set_mode_for_state()
 
   def _set_mode_for_state(self):
