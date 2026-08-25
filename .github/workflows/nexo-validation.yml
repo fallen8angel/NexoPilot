@@ -58,6 +58,9 @@ jobs:
       - name: Check NEXO Carrot-style port 7000 UI
         run: python tools/check_nexo_carrot_web.py
 
+      - name: Check XPlus MED and onroad HUD contract
+        run: python tools/check_nexo_xplus_med_ui.py
+
       - name: Check NEXO UDS and failure policy
         run: python tools/check_nexo_uds_failure_policy.py
 
