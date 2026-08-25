@@ -42,6 +42,11 @@ AlertLevel = log.DriverMonitoringState.AlertLevel
 MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+# NEXO derived services can briefly publish valid=False while every publisher is
+# still alive and on-frequency. Do not turn those sub-second validity pulses into
+# a cluster LKAS/ADAS warning. Missing/dead/slow services and explicit CAN/radar/
+# Panda faults remain immediate failures through the normal checks below.
+NEXO_VALIDITY_GRACE_FRAMES = max(1, int(0.35 / DT_CTRL))
 
 
 class SelfdriveD:
@@ -119,6 +124,7 @@ class SelfdriveD:
     self.events_prev = []
     self.logged_comm_issue = None
     self.not_running_prev = None
+    self.nexo_validity_only_comm_frames = 0
     self.experimental_mode = False
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
     self.recalibrating_seen = False
@@ -347,10 +353,31 @@ class SelfdriveD:
     # generic catch-all. ideally, a more specific event should be added above instead
     has_disable_events = self.events.contains(ET.NO_ENTRY) and (self.events.contains(ET.SOFT_DISABLE) or self.events.contains(ET.IMMEDIATE_DISABLE))
     no_system_errors = (not has_disable_events) or (len(self.events) == num_events)
-    if not self.sm.all_checks() and no_system_errors:
-      if not self.sm.all_alive():
+
+    all_checks_ok = self.sm.all_checks()
+    all_alive = self.sm.all_alive()
+    all_freq_ok = self.sm.all_freq_ok()
+    nexo_validity_only_issue = (
+      self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN"
+      and self.CP.openpilotLongitudinalControl
+      and not all_checks_ok
+      and all_alive
+      and all_freq_ok
+    )
+    if nexo_validity_only_issue:
+      self.nexo_validity_only_comm_frames += 1
+    else:
+      self.nexo_validity_only_comm_frames = 0
+
+    nexo_validity_grace = (
+      nexo_validity_only_issue
+      and self.nexo_validity_only_comm_frames <= NEXO_VALIDITY_GRACE_FRAMES
+    )
+
+    if not all_checks_ok and no_system_errors and not nexo_validity_grace:
+      if not all_alive:
         self.events.add(EventName.commIssue)
-      elif not self.sm.all_freq_ok():
+      elif not all_freq_ok:
         self.events.add(EventName.commIssueAvgFreq)
       else:
         self.events.add(EventName.commIssue)
