@@ -26,6 +26,7 @@ class FontSizes:
   speed_unit: int = 66
   max_speed: int = 36
   set_speed: int = 112
+  gear: int = 58
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,8 @@ class Colors:
   TURN_ACTIVE = rl.Color(80, 220, 120, 255)
   TURN_INACTIVE = rl.Color(180, 180, 180, 110)
   TURN_BG = rl.Color(0, 0, 0, 150)
+  GEAR_BG = rl.Color(0, 0, 0, 150)
+  GEAR_BORDER = rl.Color(255, 255, 255, 75)
 
 
 FONT_SIZES = FontSizes()
@@ -111,6 +114,7 @@ class HudRenderer(Widget):
     self._engaged: bool = False
     self.left_blinker: bool = False
     self.right_blinker: bool = False
+    self.gear_text: str = "–"
 
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
@@ -131,6 +135,19 @@ class HudRenderer(Widget):
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
 
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+
+  @staticmethod
+  def _gear_label(gear) -> str:
+    gear_name = str(gear).rsplit('.', 1)[-1].lower()
+    return {
+      'park': 'P',
+      'reverse': 'R',
+      'neutral': 'N',
+      'drive': 'D',
+      'low': 'L',
+      'sport': 'S',
+      'eco': 'E',
+    }.get(gear_name, '–')
 
   def set_wheel_critical_icon(self, critical: bool):
     """Set the wheel icon to critical or normal state."""
@@ -153,6 +170,7 @@ class HudRenderer(Widget):
       self.speed = 0.0
       self.left_blinker = False
       self.right_blinker = False
+      self.gear_text = "–"
       return
 
     controls_state = sm['controlsState']
@@ -180,12 +198,14 @@ class HudRenderer(Widget):
     # the vehicle's real left/right blinker state; hazards light both sides.
     self.left_blinker = bool(car_state.leftBlinker)
     self.right_blinker = bool(car_state.rightBlinker)
+    self.gear_text = self._gear_label(car_state.gearShifter)
 
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
     self._torque_bar.render(rect)
     self._draw_turn_indicators(rect)
+    self._draw_gear(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
@@ -211,6 +231,21 @@ class HudRenderer(Widget):
       tail_x = x + inner if direction < 0 else x - inner
       rl.draw_line_ex(rl.Vector2(tail_x, y - outer), rl.Vector2(tip_x, y), 7, color)
       rl.draw_line_ex(rl.Vector2(tip_x, y), rl.Vector2(tail_x, y + outer), 7, color)
+
+  def _draw_gear(self, rect: rl.Rectangle) -> None:
+    """Always show the physical P/R/N/D gear in the lower-right corner."""
+    size = 92
+    margin = 24
+    x = rect.x + rect.width - margin - size
+    y = rect.y + rect.height - margin - size
+    gear_rect = rl.Rectangle(x, y, size, size)
+    rl.draw_rectangle_rounded(gear_rect, 0.38, 10, COLORS.GEAR_BG)
+    rl.draw_rectangle_rounded_lines_ex(gear_rect, 0.38, 10, 3, COLORS.GEAR_BORDER)
+
+    text_size = measure_text_cached(self._font_bold, self.gear_text, FONT_SIZES.gear)
+    rl.draw_text_ex(self._font_bold, self.gear_text,
+                    rl.Vector2(x + (size - text_size.x) / 2, y + (size - text_size.y) / 2),
+                    FONT_SIZES.gear, 0, COLORS.WHITE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
