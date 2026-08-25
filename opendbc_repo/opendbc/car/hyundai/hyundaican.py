@@ -110,10 +110,13 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   # Keep the legacy template arguments only for call-site compatibility.
   del stock_scc11, stock_scc12, stock_scc14
 
-  # After the stock SCC ECU is silenced, NEXO must keep advertising that cruise
-  # is available. Otherwise the cluster shows SCC/FCA warnings and SET/RES cannot
-  # transition controlsAllowed to true even though radar tracks are active.
-  main_mode_acc = cruise_available
+  # NEXO keeps the stock SCC ECU suppressed during openpilot longitudinal.
+  # Do not force MainMode_ACC on merely because CarState reports availability:
+  # that makes the cluster show CRUISE immediately at boot. For NEXO the caller
+  # passes CC.longActive as enabled, so the cluster's cruise main indication is
+  # advertised only while speed control is actually active. Other Hyundai cars
+  # retain the normal availability-based behavior.
+  main_mode_acc = enabled if is_nexo else cruise_available
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
   scc14_enabled = acc_enabled
   stop_req = 1 if acc_enabled and stopping else 0
@@ -150,7 +153,11 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   }
 
-  if not use_fca:
+  # NEXOdriveAI's proven NEXO path supplies FCA11/FCA12 itself after the stock
+  # SCC/FCA source is suppressed. Treat NEXO as an FCA-producing path even when
+  # fingerprinting did not set USE_FCA before the ECU was muted.
+  nexo_fca = is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC)
+  if not use_fca and not nexo_fca:
     scc12_values["CF_VSM_ConfMode"] = 1
     scc12_values["AEB_Status"] = 1
 
@@ -176,15 +183,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     scc14 = (scc14[0], bytes(scc14_dat), scc14[2])
   commands.append(scc14)
 
-  # XPlus does not synthesize FCA11 on NEXO. Keep that exact NEXO behavior so
-  # SCC takeover does not create a second FCA status source during startup.
-  # Other Hyundai platforms retain the existing generated FCA11 behavior.
-  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Working NEXOdriveAI sends FCA11 continuously with the generated SCC command
+  # set. Without it, the NEXO cluster can illuminate the FCA/master warning even
+  # though radar tracks and SCC takeover are otherwise healthy.
+  if (use_fca or nexo_fca) and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 1,
+      "FCA_Status": 0 if is_nexo else 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
@@ -204,12 +211,12 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # XPlus NEXO also leaves FCA12 unsynthesized. Avoid injecting a startup FCA
-  # option stream that the working XPlus NEXO path does not send.
-  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # NEXOdriveAI also publishes FCA12 at 5 Hz. FCA_USM=0 matches that known-good
+  # NEXO behavior; other Hyundai platforms keep the existing setting.
+  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 1,
+      "FCA_USM": 0 if is_nexo else 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
