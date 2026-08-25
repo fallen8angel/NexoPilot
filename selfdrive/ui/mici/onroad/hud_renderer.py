@@ -115,6 +115,8 @@ class HudRenderer(Widget):
     self.speed: float = 0.0
     self.v_ego_cluster_seen: bool = False
     self._engaged: bool = False
+    self.long_active: bool = False
+    self.lat_active: bool = False
     self.left_blinker: bool = False
     self.right_blinker: bool = False
     self.gear_text: str = "–"
@@ -174,6 +176,8 @@ class HudRenderer(Widget):
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
+      self.long_active = False
+      self.lat_active = False
       self.left_blinker = False
       self.right_blinker = False
       self.gear_text = "–"
@@ -181,6 +185,7 @@ class HudRenderer(Widget):
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
+    car_control = sm['carControl']
 
     v_cruise_cluster = car_state.vCruiseCluster
     set_speed = (
@@ -190,6 +195,8 @@ class HudRenderer(Widget):
     if (set_speed != self.set_speed and engaged) or (engaged and not self._engaged):
       self._set_speed_changed_time = rl.get_time()
     self._engaged = engaged
+    self.long_active = bool(car_control.longActive)
+    self.lat_active = bool(car_control.latActive)
     self.set_speed = set_speed
     self.is_cruise_set = 0 < self.set_speed < SET_SPEED_NA
     self.is_cruise_available = self.set_speed != -1
@@ -280,13 +287,13 @@ class HudRenderer(Widget):
     if self._show_wheel_critical:
       self._wheel_alpha_filter.update(255)
       self._wheel_y_filter.update(0)
+    elif self.lat_active:
+      # Keep the steering icon visible for the entire time lateral control is active.
+      self._wheel_alpha_filter.update(255 * 0.9)
+      self._wheel_y_filter.update(0)
     else:
-      if ui_state.status == UIStatus.DISENGAGED:
-        self._wheel_alpha_filter.update(0)
-        self._wheel_y_filter.update(wheel_txt.height / 2)
-      else:
-        self._wheel_alpha_filter.update(255 * 0.9)
-        self._wheel_y_filter.update(0)
+      self._wheel_alpha_filter.update(0)
+      self._wheel_y_filter.update(wheel_txt.height / 2)
 
     # pos
     pos_x = int(rect.x + 21 + wheel_txt.width / 2)
@@ -318,8 +325,9 @@ class HudRenderer(Widget):
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
-    alpha = self._set_speed_alpha_filter.update(0 < rl.get_time() - self._set_speed_changed_time < SET_SPEED_PERSISTENCE and
-                                                self._can_draw_top_icons and self._engaged)
+    # XPlus-style persistent HUD: keep set speed visible for the whole time
+    # longitudinal control is actually active instead of fading after 2.5 seconds.
+    alpha = self._set_speed_alpha_filter.update(self.long_active)
     if alpha < 1e-2:
       return
 
