@@ -1,6 +1,8 @@
 from collections import deque
 import copy
 import math
+import os
+import time
 
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
@@ -8,12 +10,27 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
-from openpilot.common.nexo_vnavi import VNAVI_VIRTUAL_DISTANCE_FACTOR, write_vnavi_state
 ButtonType = structs.CarState.ButtonEvent.Type
 
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 STANDSTILL_THRESHOLD = 12 * 0.03125
+VNAVI_STATE_PATH = "/dev/shm/nexopilot_vnavi"
+VNAVI_VIRTUAL_DISTANCE_FACTOR = 6.0
+
+
+def _write_vnavi_state(active: bool, speed_limit_kph: float, distance_m: float) -> None:
+  """Publish vNAVI state without making opendbc depend on the openpilot Python package."""
+  tmp_path = f"{VNAVI_STATE_PATH}.{os.getpid()}.tmp"
+  try:
+    with open(tmp_path, "w", encoding="utf-8") as f:
+      f.write(f"{time.monotonic():.3f},{1 if active else 0},{float(speed_limit_kph):.1f},{max(0.0, float(distance_m)):.1f}\n")
+    os.replace(tmp_path, VNAVI_STATE_PATH)
+  except OSError:
+    try:
+      os.unlink(tmp_path)
+    except OSError:
+      pass
 
 # Cancel button can sometimes be ACC pause/resume button, main button can also enable on some cars
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
@@ -107,7 +124,7 @@ class CarState(CarStateBase):
     self.vnavi_publish_counter += 1
     state_changed = was_active != self.vnavi_active or old_speed != self.vnavi_speed
     if state_changed or self.vnavi_publish_counter >= 10:
-      write_vnavi_state(self.vnavi_active, self.vnavi_speed, distance)
+      _write_vnavi_state(self.vnavi_active, self.vnavi_speed, distance)
       self.vnavi_publish_counter = 0
 
   def recent_button_interaction(self) -> bool:
