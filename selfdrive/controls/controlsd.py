@@ -30,6 +30,14 @@ GearShifter = car.CarState.GearShifter
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 
+def _onroad_event_name(event) -> str:
+  """Return a stable short event name for NEXO MED state preservation."""
+  try:
+    return str(event.name).rsplit(".", 1)[-1]
+  except Exception:
+    return ""
+
+
 class Controls:
   def __init__(self) -> None:
     self.params = Params()
@@ -48,11 +56,11 @@ class Controls:
     self.curvature = 0.0
     self.desired_curvature = 0.0
 
-    # First-gen NEXO MED state mirrors XPlus: MODE arms steering only, SET/RES
-    # adds longitudinal control, brake/first CANCEL returns to steering-only,
-    # and a second CANCEL while waiting turns MED fully off.
+    # First-gen NEXO MED state mirrors XPlus: boot into MED_WAIT (lateral/main
+    # selected, speed control off), SET/RES adds longitudinal control,
+    # brake/first CANCEL returns to MED_WAIT, and a second CANCEL turns MED off.
     self.nexo_med = self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl
-    self.nexo_med_lateral = False
+    self.nexo_med_lateral = self.nexo_med
     self.nexo_med_speed = False
 
     self.pose_calibrator = PoseCalibrator()
@@ -98,6 +106,8 @@ class Controls:
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
     selfdrive_enabled = self.sm['selfdriveState'].enabled
+    driving_gear = CS.gearShifter in (GearShifter.drive, GearShifter.low)
+    disable_events = [e for e in self.sm['onroadEvents'] if e.immediateDisable or e.softDisable]
 
     if self.nexo_med:
       main_pressed = any(b.type == ButtonType.mainCruise and b.pressed for b in CS.buttonEvents)
@@ -110,9 +120,17 @@ class Controls:
         if not self.nexo_med_lateral:
           self.nexo_med_speed = False
 
-      if speed_pressed:
+      # Never accept a speed-control request outside a forward driving gear or
+      # while controlsd still has a disable event. This keeps wrongGear safety intact.
+      if speed_pressed and driving_gear and not disable_events:
         self.nexo_med_lateral = True
         self.nexo_med_speed = True
+
+      # P/N/R is a temporary MED_WAIT condition, not a reason to forget the
+      # driver's MED/main selection. Drop speed control only and keep lateral
+      # selection stored so D can be used again without rebooting or cycling MODE.
+      if not driving_gear:
+        self.nexo_med_speed = False
 
       # Braking is the XPlus MED transition from speed control back to steering-only.
       if CS.brakePressed and (self.nexo_med_speed or selfdrive_enabled):
@@ -127,26 +145,31 @@ class Controls:
         elif self.nexo_med_lateral:
           self.nexo_med_lateral = False
 
-      # Never use MED to bypass real disable conditions.
-      if any(e.immediateDisable or e.softDisable for e in self.sm['onroadEvents']):
+      # Preserve MED only for the expected gear-transition wrongGear event.
+      # Any other real immediate/soft disable still turns MED fully off.
+      non_gear_disable = [e for e in disable_events if _onroad_event_name(e) != "wrongGear"]
+      if non_gear_disable:
         self.nexo_med_lateral = False
         self.nexo_med_speed = False
 
+    # A remembered MED selection must never actuate in P/N/R or while any
+    # disable event is active. This preserves the stock/openpilot wrongGear gate.
+    med_actuation_allowed = self.nexo_med and self.nexo_med_lateral and driving_gear and not disable_events
+
     CC = car.CarControl.new_message()
-    # Keep CarControl enabled while MED owns lateral so Panda heartbeat and
-    # controls_allowed remain aligned. Longitudinal has its own independent gate.
-    CC.enabled = selfdrive_enabled or (self.nexo_med and self.nexo_med_lateral)
+    # Keep CarControl enabled while MED owns lateral in a valid driving state.
+    # Longitudinal has its own independent gate below.
+    CC.enabled = selfdrive_enabled or med_actuation_allowed
 
     # Check which actuators can be enabled
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
-    driving_gear = CS.gearShifter in (GearShifter.drive, GearShifter.low)
-    lateral_requested = self.sm['selfdriveState'].active or (self.nexo_med and self.nexo_med_lateral and driving_gear)
+    lateral_requested = self.sm['selfdriveState'].active or med_actuation_allowed
     CC.latActive = lateral_requested and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
 
     longitudinal_requested = selfdrive_enabled
     if self.nexo_med:
-      longitudinal_requested = longitudinal_requested and self.nexo_med_speed
+      longitudinal_requested = longitudinal_requested and self.nexo_med_speed and driving_gear and not disable_events
     CC.longActive = longitudinal_requested and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 
     actuators = CC.actuators
