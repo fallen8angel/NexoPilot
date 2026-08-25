@@ -1,6 +1,7 @@
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
+from openpilot.common.nexo_vnavi import read_vnavi_state
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -34,6 +35,7 @@ class FontSizes:
   max_speed: int = 40
   set_speed: int = 90
   exp_badge: int = 34
+  vnavi: int = 36
   gear: int = 70
 
 
@@ -56,6 +58,7 @@ class Colors:
   TURN_ACTIVE = rl.Color(80, 220, 120, 255)
   TURN_INACTIVE = rl.Color(170, 170, 170, 115)
   EXP_ACTIVE = rl.Color(128, 216, 166, 245)
+  VNAVI = rl.Color(210, 165, 255, 255)
 
 
 UI_CONFIG = UIConfig()
@@ -76,6 +79,9 @@ class HudRenderer(Widget):
     self.right_blinker: bool = False
     self.experimental_mode: bool = False
     self.gear_text: str = "–"
+    self.vnavi_active: bool = False
+    self.vnavi_speed_limit: float = 0.0
+    self.vnavi_distance: float = 0.0
 
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
@@ -108,6 +114,9 @@ class HudRenderer(Widget):
       self.left_blinker = False
       self.right_blinker = False
       self.gear_text = "–"
+      self.vnavi_active = False
+      self.vnavi_speed_limit = 0.0
+      self.vnavi_distance = 0.0
       return
 
     controls_state = sm['controlsState']
@@ -134,6 +143,15 @@ class HudRenderer(Widget):
     self.right_blinker = bool(car_state.rightBlinker)
     self.gear_text = self._gear_label(car_state.gearShifter)
 
+    vnavi_state = read_vnavi_state()
+    self.vnavi_active = bool(vnavi_state and vnavi_state[0])
+    if self.vnavi_active:
+      self.vnavi_speed_limit = vnavi_state[1]
+      self.vnavi_distance = vnavi_state[2]
+    else:
+      self.vnavi_speed_limit = 0.0
+      self.vnavi_distance = 0.0
+
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
     # Draw the header background
@@ -150,6 +168,7 @@ class HudRenderer(Widget):
       self._draw_set_speed(rect)
 
     self._draw_current_speed(rect)
+    self._draw_vnavi(rect)
     self._draw_turn_indicators(rect)
     self._draw_gear(rect)
 
@@ -215,6 +234,17 @@ class HudRenderer(Widget):
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+
+  def _draw_vnavi(self, rect: rl.Rectangle) -> None:
+    if not self.vnavi_active:
+      return
+    speed = round(self.vnavi_speed_limit)
+    distance = round(self.vnavi_distance)
+    text = f"vNAVI {speed} · {distance}m"
+    text_size = measure_text_cached(self._font_semi_bold, text, FONT_SIZES.vnavi)
+    x = rect.x + rect.width / 2 - text_size.x / 2
+    y = rect.y + 326
+    rl.draw_text_ex(self._font_semi_bold, text, rl.Vector2(x, y), FONT_SIZES.vnavi, 0, COLORS.VNAVI)
 
   def _draw_turn_indicators(self, rect: rl.Rectangle) -> None:
     """Always show left/right arrows; brighten the side that is physically blinking."""

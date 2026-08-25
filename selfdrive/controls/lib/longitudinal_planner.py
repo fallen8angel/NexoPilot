@@ -6,6 +6,7 @@ import cereal.messaging as messaging
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.common.nexo_vnavi import calculate_vnavi_target_speed, read_vnavi_state
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -58,6 +59,9 @@ class LongitudinalPlanner:
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
+    self.vnavi_active = False
+    self.vnavi_speed_limit = 0.0
+    self.vnavi_distance = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -93,6 +97,19 @@ class LongitudinalPlanner:
     v_cruise_kph = min(sm['carState'].vCruise, V_CRUISE_MAX)
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
+
+    # NEXO vNAVI: cap the cruise target with the stock-navigation camera curve.
+    # This only influences openpilot longitudinal control; stock cruise behavior is untouched.
+    vnavi_state = read_vnavi_state() if self.CP.openpilotLongitudinalControl else None
+    self.vnavi_active = bool(vnavi_state and vnavi_state[0])
+    if self.vnavi_active:
+      self.vnavi_speed_limit = vnavi_state[1]
+      self.vnavi_distance = vnavi_state[2]
+      vnavi_target_kph = calculate_vnavi_target_speed(self.vnavi_distance, self.vnavi_speed_limit)
+      v_cruise = min(v_cruise, vnavi_target_kph * CV.KPH_TO_MS)
+    else:
+      self.vnavi_speed_limit = 0.0
+      self.vnavi_distance = 0.0
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel

@@ -8,6 +8,7 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
+from openpilot.common.nexo_vnavi import VNAVI_VIRTUAL_DISTANCE_FACTOR, write_vnavi_state
 ButtonType = structs.CarState.ButtonEvent.Type
 
 PREV_BUTTON_SAMPLES = 8
@@ -69,6 +70,45 @@ class CarState(CarStateBase):
     self.scc11 = {}
     self.scc12 = {}
     self.scc14 = {}
+
+    # NEXO stock-navigation camera state (Navi_HU / CAN 0x544).
+    # Exact event distance is not exposed on this generation, so use Carrot's
+    # speed-based virtual-distance fallback until an exact NEXO distance CAN is validated.
+    self.vnavi_total_distance = 0.0
+    self.vnavi_target_distance = 0.0
+    self.vnavi_active = False
+    self.vnavi_speed = 0
+    self.vnavi_publish_counter = 0
+
+  def _update_vnavi(self, cp, ret) -> None:
+    self.vnavi_total_distance += max(0.0, ret.vEgo) * 0.01
+    timestamp = max(cp.ts_nanos.get("Navi_HU", {}).values(), default=0)
+    age = getattr(cp, "_last_update_nanos", timestamp) - timestamp
+    fresh = timestamp > 0 and 0 <= age <= 1_000_000_000
+    navi = cp.vl["Navi_HU"]
+    speed_limit = int(navi["SpeedLim_Nav_Clu"])
+    camera_active = fresh and int(navi["SpeedLim_Nav_Cam"]) == 1 and 0 < speed_limit < 255
+
+    was_active = self.vnavi_active
+    old_speed = self.vnavi_speed
+    if camera_active:
+      if not self.vnavi_active or speed_limit != self.vnavi_speed:
+        self.vnavi_target_distance = self.vnavi_total_distance + speed_limit * VNAVI_VIRTUAL_DISTANCE_FACTOR
+      self.vnavi_active = True
+      self.vnavi_speed = speed_limit
+      distance = max(0.0, self.vnavi_target_distance - self.vnavi_total_distance)
+    else:
+      self.vnavi_active = False
+      self.vnavi_speed = 0
+      self.vnavi_target_distance = self.vnavi_total_distance
+      distance = 0.0
+
+    # Publish at 10 Hz, plus immediately on activation/deactivation or limit changes.
+    self.vnavi_publish_counter += 1
+    state_changed = was_active != self.vnavi_active or old_speed != self.vnavi_speed
+    if state_changed or self.vnavi_publish_counter >= 10:
+      write_vnavi_state(self.vnavi_active, self.vnavi_speed, distance)
+      self.vnavi_publish_counter = 0
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -235,6 +275,9 @@ class CarState(CarStateBase):
     if ret.vEgo > (self.CP.minSteerSpeed + 4.):
       self.low_speed_alert = False
     ret.lowSpeedAlert = self.low_speed_alert
+
+    if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      self._update_vnavi(cp, ret)
     return ret
 
   def update_canfd(self, can_parsers) -> structs.CarState:
@@ -328,7 +371,8 @@ class CarState(CarStateBase):
     if CP.flags & HyundaiFlags.CANFD:
       return self.get_can_parsers_canfd(CP)
 
+    pt_msgs = [("Navi_HU", math.nan)] if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else []
     return {
-      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 0),
+      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_msgs, 0),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
     }
