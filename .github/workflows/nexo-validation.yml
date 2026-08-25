@@ -61,6 +61,9 @@ jobs:
       - name: Check XPlus MED and onroad HUD contract
         run: python tools/check_nexo_xplus_med_ui.py
 
+      - name: Check NEXO stock-navigation vNAVI
+        run: python tools/check_nexo_vnavi.py
+
       - name: Check NEXO UDS and failure policy
         run: python tools/check_nexo_uds_failure_policy.py
 
