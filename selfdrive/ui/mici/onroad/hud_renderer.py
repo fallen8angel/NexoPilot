@@ -32,6 +32,9 @@ class FontSizes:
 class Colors:
   WHITE = rl.WHITE
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
+  TURN_ACTIVE = rl.Color(80, 220, 120, 255)
+  TURN_INACTIVE = rl.Color(180, 180, 180, 110)
+  TURN_BG = rl.Color(0, 0, 0, 150)
 
 
 FONT_SIZES = FontSizes()
@@ -106,6 +109,8 @@ class HudRenderer(Widget):
     self.speed: float = 0.0
     self.v_ego_cluster_seen: bool = False
     self._engaged: bool = False
+    self.left_blinker: bool = False
+    self.right_blinker: bool = False
 
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
@@ -146,6 +151,8 @@ class HudRenderer(Widget):
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
+      self.left_blinker = False
+      self.right_blinker = False
       return
 
     controls_state = sm['controlsState']
@@ -169,15 +176,41 @@ class HudRenderer(Widget):
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
 
+    # Always keep both physical turn indicators on screen. The active side follows
+    # the vehicle's real left/right blinker state; hazards light both sides.
+    self.left_blinker = bool(car_state.leftBlinker)
+    self.right_blinker = bool(car_state.rightBlinker)
+
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
     self._torque_bar.render(rect)
+    self._draw_turn_indicators(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
     self._draw_steering_wheel(rect)
+
+  def _draw_turn_indicators(self, rect: rl.Rectangle) -> None:
+    """Always show both arrows and highlight the side with the physical blinker on."""
+    radius = 36
+    y = rect.y + 220
+    left_x = rect.x + 58
+    right_x = rect.x + rect.width - 58
+
+    for x, active, direction in (
+      (left_x, self.left_blinker, -1),
+      (right_x, self.right_blinker, 1),
+    ):
+      rl.draw_circle(int(x), int(y), radius, COLORS.TURN_BG)
+      color = COLORS.TURN_ACTIVE if active else COLORS.TURN_INACTIVE
+      inner = 17
+      outer = 22
+      tip_x = x - inner if direction < 0 else x + inner
+      tail_x = x + inner if direction < 0 else x - inner
+      rl.draw_line_ex(rl.Vector2(tail_x, y - outer), rl.Vector2(tip_x, y), 7, color)
+      rl.draw_line_ex(rl.Vector2(tip_x, y), rl.Vector2(tail_x, y + outer), 7, color)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
