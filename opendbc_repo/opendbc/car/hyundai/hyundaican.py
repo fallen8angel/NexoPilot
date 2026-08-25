@@ -176,15 +176,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     scc14 = (scc14[0], bytes(scc14_dat), scc14[2])
   commands.append(scc14)
 
-  # XPlus keeps the FCA status stream present after radar/SCC suppression.
-  # Mirror that behavior when FCA11 exists on this car instead of relying on
-  # the muted factory stream to keep the cluster/FCA state alive.
-  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # XPlus does not synthesize FCA11 on NEXO. Keep that exact NEXO behavior so
+  # SCC takeover does not create a second FCA status source during startup.
+  # Other Hyundai platforms retain the existing generated FCA11 behavior.
+  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 0 if is_nexo else 1,
+      "FCA_Status": 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
@@ -195,6 +195,7 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
+  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -203,9 +204,9 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # XPlus also advertises the FCA user/status option while stock SCC/FCA
-  # communication is suppressed. Keep the same 5 Hz option stream on NEXO.
-  if not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # XPlus NEXO also leaves FCA12 unsynthesized. Avoid injecting a startup FCA
+  # option stream that the working XPlus NEXO path does not send.
+  if not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
       "FCA_USM": 1,
