@@ -27,6 +27,12 @@ CANCEL_BUTTON_DELAY_FRAMES = 10
 def process_hud_alert(enabled, fingerprint, hud_control):
   sys_warning = (hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw))
 
+  # NEXO: do not mirror openpilot's UI-only steering/LDW visual alert into the
+  # factory LKAS master-warning bit. The alert remains visible on the comma UI,
+  # while real EPS/CAN/radar/Panda faults are still handled by their native paths.
+  if fingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+    sys_warning = False
+
   # initialize to no line visible
   # TODO: this is not accurate for all cars
   sys_state = 1
