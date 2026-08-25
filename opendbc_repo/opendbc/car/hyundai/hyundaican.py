@@ -110,13 +110,11 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   # Keep the legacy template arguments only for call-site compatibility.
   del stock_scc11, stock_scc12, stock_scc14
 
-  # NEXO keeps the stock SCC ECU suppressed during openpilot longitudinal.
-  # Do not force MainMode_ACC on merely because CarState reports availability:
-  # that makes the cluster show CRUISE immediately at boot. For NEXO the caller
-  # passes CC.longActive as enabled, so the cluster's cruise main indication is
-  # advertised only while speed control is actually active. Other Hyundai cars
-  # retain the normal availability-based behavior.
-  main_mode_acc = enabled if is_nexo else cruise_available
+  # On NEXO the cluster's CRUISE main indication represents the driver's MED
+  # main selection, while actual longitudinal actuation still follows the
+  # separate `enabled` gate passed from CC.longActive. This keeps MODE and
+  # SET/RES independent without ever making ACCMode active from the indicator.
+  main_mode_acc = hud_control.lanesVisible if is_nexo else cruise_available
   acc_enabled = enabled if is_nexo else enabled and main_mode_acc
   scc14_enabled = acc_enabled
   stop_req = 1 if acc_enabled and stopping else 0

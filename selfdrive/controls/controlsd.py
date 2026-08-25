@@ -56,12 +56,14 @@ class Controls:
     self.curvature = 0.0
     self.desired_curvature = 0.0
 
-    # First-gen NEXO MED state mirrors XPlus: boot into MED_WAIT (lateral/main
-    # selected, speed control off), SET/RES adds longitudinal control,
-    # brake/first CANCEL returns to MED_WAIT, and a second CANCEL turns MED off.
+    # First-gen NEXO MED keeps the driver's main selection separate from actual
+    # actuation. MODE explicitly selects MED, SET/RES adds speed control, brake
+    # returns to steering-only, and a real soft/immediate disable latches
+    # actuation off until MODE is pressed again after the fault clears.
     self.nexo_med = self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and self.CP.openpilotLongitudinalControl
-    self.nexo_med_lateral = self.nexo_med
+    self.nexo_med_lateral = False
     self.nexo_med_speed = False
+    self.nexo_med_rearm_required = False
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -116,13 +118,21 @@ class Controls:
       cancel_pressed = any(b.type == ButtonType.cancel and b.pressed for b in CS.buttonEvents)
 
       if main_pressed:
-        self.nexo_med_lateral = not self.nexo_med_lateral
-        if not self.nexo_med_lateral:
-          self.nexo_med_speed = False
+        # After a real disable, MODE is an explicit re-arm acknowledgement.
+        # It never bypasses an active disable because the latch is set again
+        # below while the event remains present.
+        if self.nexo_med_lateral and self.nexo_med_rearm_required:
+          self.nexo_med_rearm_required = False
+        else:
+          self.nexo_med_lateral = not self.nexo_med_lateral
+          self.nexo_med_rearm_required = False
+          if not self.nexo_med_lateral:
+            self.nexo_med_speed = False
 
-      # Never accept a speed-control request outside a forward driving gear or
-      # while controlsd still has a disable event. This keeps wrongGear safety intact.
-      if speed_pressed and driving_gear and not disable_events:
+      # Never accept a speed-control request outside a forward driving gear,
+      # while controlsd still has a disable event, or before the driver re-arms
+      # MED after a real disable.
+      if speed_pressed and driving_gear and not disable_events and not self.nexo_med_rearm_required:
         self.nexo_med_lateral = True
         self.nexo_med_speed = True
 
@@ -144,17 +154,21 @@ class Controls:
           self.nexo_med_lateral = True
         elif self.nexo_med_lateral:
           self.nexo_med_lateral = False
+          self.nexo_med_rearm_required = False
 
-      # Preserve MED only for the expected gear-transition wrongGear event.
-      # Any other real immediate/soft disable still turns MED fully off.
+      # Preserve the driver's MED main selection across real system faults, but
+      # drop speed control and require an explicit MODE re-arm after the fault
+      # clears. The active fault still blocks every actuator below.
       non_gear_disable = [e for e in disable_events if _onroad_event_name(e) != "wrongGear"]
       if non_gear_disable:
-        self.nexo_med_lateral = False
         self.nexo_med_speed = False
+        if self.nexo_med_lateral:
+          self.nexo_med_rearm_required = True
 
-    # A remembered MED selection must never actuate in P/N/R or while any
-    # disable event is active. This preserves the stock/openpilot wrongGear gate.
-    med_actuation_allowed = self.nexo_med and self.nexo_med_lateral and driving_gear and not disable_events
+    # A remembered MED selection must never actuate in P/N/R, while any disable
+    # event is active, or while the post-fault re-arm latch is set.
+    med_actuation_allowed = (self.nexo_med and self.nexo_med_lateral and not self.nexo_med_rearm_required and
+                             driving_gear and not disable_events)
 
     CC = car.CarControl.new_message()
     # Keep CarControl enabled while MED owns lateral in a valid driving state.
@@ -233,7 +247,10 @@ class Controls:
     hudControl = CC.hudControl
     hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
     hudControl.speedVisible = CC.longActive if self.nexo_med else CC.enabled
-    hudControl.lanesVisible = CC.latActive if self.nexo_med else CC.enabled
+    # For NEXO this is the MED main-selection indicator, not an actuator gate.
+    # carcontroller/hyundaican use it only for MainMode_ACC; CC.latActive and
+    # CC.longActive remain the sole actuation gates.
+    hudControl.lanesVisible = self.nexo_med_lateral if self.nexo_med else CC.enabled
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
     hudControl.leadDistance = self.sm['longitudinalPlan'].leadDistance
     hudControl.leadRelSpeed = self.sm['longitudinalPlan'].leadRelSpeed

@@ -99,7 +99,7 @@ def validate_interface() -> None:
     "START NEXOdriveAI long init",
     "UDS PLAN radar first",
     "physical src0 silence is the success criterion",
-    "DONE NEXO radar-then-disable sequence; physical source0 silence verified; runtime SCC guard armed by card",
+    "DONE NEXO radar-then-disable sequence; physical src0 silence verified; runtime SCC guard armed by card",
     "NexoAccFaultQualifier",
     "ret.accFaulted = decision.qualified_fault",
   )
@@ -129,15 +129,13 @@ def validate_hyundaican() -> None:
   create_acc_opt = find_function(tree, "create_acc_opt")
   values = assignments(create_acc_commands)
 
-  # NEXO must not light the cluster's CRUISE main indication at boot merely
-  # because the synthetic CarState reports cruise availability. The controller
-  # passes CC.longActive as enabled for NEXO, so MainMode_ACC follows actual
-  # speed-control activity. Other Hyundai platforms retain cruise_available.
+  # NEXO cluster CRUISE main must follow the driver's MED main selection, not
+  # CC.longActive. Longitudinal actuation remains independently gated by enabled.
   main_mode_acc = values.get("main_mode_acc")
   require(isinstance(main_mode_acc, ast.IfExp), "main_mode_acc must be a conditional expression")
-  require(is_name(main_mode_acc.test, "is_nexo") and is_name(main_mode_acc.body, "enabled") and
+  require(is_name(main_mode_acc.test, "is_nexo") and ast.unparse(main_mode_acc.body) == "hud_control.lanesVisible" and
           is_name(main_mode_acc.orelse, "cruise_available"),
-          "NEXO main mode must follow enabled while non-NEXO follows cruise_available")
+          "NEXO main mode must follow MED main selection while non-NEXO follows cruise_available")
 
   acc_enabled = values.get("acc_enabled")
   require(isinstance(acc_enabled, ast.IfExp), "acc_enabled must be a conditional expression")
@@ -210,6 +208,32 @@ def validate_controller() -> None:
 
   require("longitudinal_enabled = CC.longActive if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else CC.enabled" in compact,
           "NEXO longitudinal SCC must be gated by CC.longActive for MED/speed-control separation")
+
+
+def validate_controlsd() -> None:
+  source = read("selfdrive/controls/controlsd.py")
+  compact = " ".join(source.split())
+
+  required = (
+    "self.nexo_med_lateral = False",
+    "self.nexo_med_speed = False",
+    "self.nexo_med_rearm_required = False",
+    "if self.nexo_med_lateral and self.nexo_med_rearm_required",
+    "speed_pressed and driving_gear and not disable_events and not self.nexo_med_rearm_required",
+    "self.nexo_med_rearm_required = True",
+    "not self.nexo_med_rearm_required and driving_gear and not disable_events",
+    "hudControl.lanesVisible = self.nexo_med_lateral if self.nexo_med else CC.enabled",
+  )
+  for token in required:
+    require(token in compact, f"NEXO MED re-arm contract missing: {token}")
+
+  non_gear_start = source.index("if non_gear_disable:")
+  non_gear_end = source.index("# A remembered MED selection", non_gear_start)
+  non_gear_block = source[non_gear_start:non_gear_end]
+  require("self.nexo_med_lateral = False" not in non_gear_block,
+          "real disable must preserve the MED main selection while latching actuation off")
+  require("self.nexo_med_speed = False" in non_gear_block and "self.nexo_med_rearm_required = True" in non_gear_block,
+          "real disable must drop speed control and set the re-arm latch")
 
 
 def validate_recovery() -> None:
@@ -301,6 +325,7 @@ def main() -> None:
   validate_interface()
   validate_hyundaican()
   validate_controller()
+  validate_controlsd()
   validate_recovery()
   validate_runtime_guard()
   validate_safety()
