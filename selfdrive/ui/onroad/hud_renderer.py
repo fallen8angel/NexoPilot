@@ -25,7 +25,9 @@ class UIConfig:
   set_speed_height: int = 204
   wheel_icon_size: int = 144
   turn_indicator_radius: int = 48
-  gear_box_size: int = 116
+  # XPlus lower-status HUD uses a 70 x 80 gear box.
+  gear_box_width: int = 70
+  gear_box_height: int = 80
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class FontSizes:
   exp_badge: int = 34
   vnavi: int = 36
   gear: int = 70
+  cruise_gap: int = 40
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,7 @@ class Colors:
   TURN_INACTIVE = rl.Color(170, 170, 170, 115)
   EXP_ACTIVE = rl.Color(128, 216, 166, 245)
   VNAVI = rl.Color(210, 165, 255, 255)
+  GEAR_GREEN = rl.Color(0, 255, 0, 210)
 
 
 UI_CONFIG = UIConfig()
@@ -79,6 +83,7 @@ class HudRenderer(Widget):
     self.right_blinker: bool = False
     self.experimental_mode: bool = False
     self.gear_text: str = "–"
+    self.cruise_gap: int = 0
     self.vnavi_active: bool = False
     self.vnavi_speed_limit: float = 0.0
     self.vnavi_distance: float = 0.0
@@ -114,6 +119,7 @@ class HudRenderer(Widget):
       self.left_blinker = False
       self.right_blinker = False
       self.gear_text = "–"
+      self.cruise_gap = 0
       self.vnavi_active = False
       self.vnavi_speed_limit = 0.0
       self.vnavi_distance = 0.0
@@ -142,6 +148,19 @@ class HudRenderer(Widget):
     self.left_blinker = bool(car_state.leftBlinker)
     self.right_blinker = bool(car_state.rightBlinker)
     self.gear_text = self._gear_label(car_state.gearShifter)
+
+    # Keep the number beside the gear tied to the live following-distance setting.
+    # controlsd publishes leadDistanceBars from the active longitudinal personality.
+    try:
+      gap = int(sm['carControl'].hudControl.leadDistanceBars)
+    except Exception:
+      gap = 0
+    if gap <= 0:
+      try:
+        gap = int(ui_state.params.get_int("LongitudinalPersonality")) + 1
+      except Exception:
+        gap = 0
+    self.cruise_gap = max(1, min(gap, 4)) if gap > 0 else 0
 
     vnavi_state = read_vnavi_state()
     self.vnavi_active = bool(vnavi_state and vnavi_state[0])
@@ -290,15 +309,29 @@ class HudRenderer(Widget):
                     FONT_SIZES.exp_badge, 0, COLORS.EXP_ACTIVE)
 
   def _draw_gear(self, rect: rl.Rectangle) -> None:
-    """Show current P/R/N/D gear at the lower-right corner like XPlus."""
-    size = UI_CONFIG.gear_box_size
-    x = rect.x + rect.width - UI_CONFIG.border_size - size
-    y = rect.y + rect.height - UI_CONFIG.border_size - size
-    gear_rect = rl.Rectangle(x, y, size, size)
-    rl.draw_rectangle_rounded(gear_rect, 0.38, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_rectangle_rounded_lines_ex(gear_rect, 0.38, 10, 4, COLORS.BORDER_TRANSLUCENT)
+    """Show XPlus-sized P/R/N/D gear and following-distance number at lower-right."""
+    width = UI_CONFIG.gear_box_width
+    height = UI_CONFIG.gear_box_height
+    x = rect.x + rect.width - UI_CONFIG.border_size - width
+    y = rect.y + rect.height - UI_CONFIG.border_size - height
+    gear_rect = rl.Rectangle(x, y, width, height)
 
-    text_size = measure_text_cached(self._font_bold, self.gear_text, FONT_SIZES.gear)
+    # Match the XPlus 70 x 80 gear tile while keeping the photo-style dark center
+    # and green outline that is easy to read over the road camera image.
+    rl.draw_rectangle_rounded(gear_rect, 0.20, 8, COLORS.BLACK_TRANSLUCENT)
+    rl.draw_rectangle_rounded_lines_ex(gear_rect, 0.20, 8, 3, COLORS.GEAR_GREEN)
+
+    gear_size = measure_text_cached(self._font_bold, self.gear_text, FONT_SIZES.gear)
     rl.draw_text_ex(self._font_bold, self.gear_text,
-                    rl.Vector2(x + (size - text_size.x) / 2, y + (size - text_size.y) / 2),
+                    rl.Vector2(x + (width - gear_size.x) / 2, y + (height - gear_size.y) / 2),
                     FONT_SIZES.gear, 0, COLORS.WHITE)
+
+    # XPlus places the 40 px gap number 50 px to the left of the gear tile.
+    if self.cruise_gap > 0:
+      gap_text = str(self.cruise_gap)
+      gap_size = measure_text_cached(self._font_bold, gap_text, FONT_SIZES.cruise_gap)
+      gap_center_x = x - 50
+      gap_y = y + (height - gap_size.y) / 2 + 8
+      rl.draw_text_ex(self._font_bold, gap_text,
+                      rl.Vector2(gap_center_x - gap_size.x / 2, gap_y),
+                      FONT_SIZES.cruise_gap, 0, COLORS.WHITE)
