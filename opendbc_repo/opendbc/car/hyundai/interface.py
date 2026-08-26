@@ -8,7 +8,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.hyundai.radar_tracks import enable_radar_tracks
-from opendbc.car.hyundai.nexo_takeover import ensure_nexo_stock_scc_silent
+from opendbc.car.hyundai.nexo_takeover import NEXO_STOCK_SCC_ADDRS, ensure_nexo_stock_scc_silent
 from opendbc.car.hyundai.nexo_acc_fault import NexoAccFaultQualifier
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
@@ -71,6 +71,45 @@ def _clear_nexo_takeover_marker() -> None:
     _trace_nexo_restore(f"MARKER clear failed detail={error}")
 
 
+def _nexo_stock_scc_already_active(can_recv, *, sample_s: float = 0.25,
+                                   min_source0_frames: int = 20) -> bool:
+  """Return True only when physical source-0 proves stock SCC is already talking.
+
+  This is a restore guard, not a takeover check. If the observation is missing,
+  incomplete, or throws, fail closed and let the normal UDS restore path run.
+  """
+  deadline = time.monotonic() + sample_s
+  source0_frames = 0
+  stock_scc_frames = 0
+  stock_scc_counts: dict[int, int] = {}
+
+  try:
+    while time.monotonic() < deadline:
+      for batch in can_recv(wait_for_one=True):
+        for message in batch:
+          if int(getattr(message, "src", -1)) != 0:
+            continue
+          source0_frames += 1
+          address = int(getattr(message, "address", -1))
+          if address in NEXO_STOCK_SCC_ADDRS:
+            stock_scc_frames += 1
+            stock_scc_counts[address] = stock_scc_counts.get(address, 0) + 1
+  except Exception as error:
+    _trace_nexo_restore(
+      f"RESTORE PRECHECK observation failed detail={type(error).__name__}: {error}"
+    )
+    return False
+
+  enough_bus_data = source0_frames >= min_source0_frames
+  active = enough_bus_data and stock_scc_frames > 0
+  counts = {f"0x{address:03X}": count for address, count in sorted(stock_scc_counts.items())}
+  _trace_nexo_restore(
+    f"RESTORE PRECHECK source0_frames={source0_frames} stock_scc={stock_scc_frames} "
+    f"counts={counts} enough={enough_bus_data} alreadyActive={active}"
+  )
+  return active
+
+
 def restore_nexo_stock_scc_communication(can_recv, can_send, *, bus: int = 0, addr: int = 0x7D0,
                                          reason: str = "", retries: int = 3,
                                          release_owner_on_failure: bool = False) -> bool:
@@ -94,6 +133,22 @@ def restore_nexo_stock_scc_communication(can_recv, can_send, *, bus: int = 0, ad
       )
       _trace_nexo_restore(message)
       _trace_nexo_long_init(message)
+      return True
+
+    # A failed radar/session transition can leave a recovery marker or owner
+    # behind even though factory SCC communication is already physically back.
+    # In that case another 0x28 restore is unnecessary and may only prolong a
+    # bad diagnostic session. Prove stock source-0 SCC traffic first; if proof
+    # is incomplete, fail closed into the existing UDS restore path below.
+    if _nexo_stock_scc_already_active(can_recv):
+      message = (
+        f"RESTORE SKIP reason={reason or 'unspecified'} caller={caller_token} "
+        f"detail={owner_detail}; physical source0 stock SCC already active"
+      )
+      _trace_nexo_restore(message)
+      _trace_nexo_long_init(message)
+      _clear_nexo_takeover_marker()
+      clear_owner_if_current_unlocked(caller_token)
       return True
 
     communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
