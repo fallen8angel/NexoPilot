@@ -1,3 +1,5 @@
+import time
+
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
@@ -18,6 +20,7 @@ KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
 
 SET_SPEED_PERSISTENCE = 2.5  # seconds
+TURN_SIGNAL_BLINK_PERIOD = 1 / (80 / 60)
 
 
 @dataclass(frozen=True)
@@ -33,9 +36,6 @@ class FontSizes:
 class Colors:
   WHITE = rl.WHITE
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
-  TURN_ACTIVE = rl.Color(80, 220, 120, 255)
-  TURN_INACTIVE = rl.Color(180, 180, 180, 110)
-  TURN_BG = rl.Color(0, 0, 0, 150)
   GEAR_BG = rl.Color(0, 0, 0, 150)
   GEAR_BORDER = rl.Color(255, 255, 255, 75)
 
@@ -133,6 +133,8 @@ class HudRenderer(Widget):
     self._txt_wheel: rl.Texture = gui_app.texture('icons_mici/wheel.png', 50, 50)
     self._txt_wheel_critical: rl.Texture = gui_app.texture('icons_mici/wheel_critical.png', 50, 50)
     self._txt_exclamation_point: rl.Texture = gui_app.texture('icons_mici/exclamation_point.png', 9, 44)
+    self._txt_turn_signal_left: rl.Texture = gui_app.texture('icons_mici/onroad/turn_signal_left.png', 104, 96)
+    self._txt_turn_signal_right: rl.Texture = gui_app.texture('icons_mici/onroad/turn_signal_right.png', 104, 96)
     self._txt_experimental_mode: rl.Texture = gui_app.texture('icons_mici/experimental_mode.png', 40, 40)
 
     self._wheel_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
@@ -225,24 +227,19 @@ class HudRenderer(Widget):
     self._draw_steering_wheel(rect)
 
   def _draw_turn_indicators(self, rect: rl.Rectangle) -> None:
-    """Always show both arrows and highlight the side with the physical blinker on."""
-    radius = 36
-    y = rect.y + 220
-    left_x = rect.x + 58
-    right_x = rect.x + rect.width - 58
+    """Show the stock Mici turn-signal icons at the upper corners."""
+    blink_on = (time.monotonic() % TURN_SIGNAL_BLINK_PERIOD) < (TURN_SIGNAL_BLINK_PERIOD * 0.5)
+    if not blink_on:
+      return
 
-    for x, active, direction in (
-      (left_x, self.left_blinker, -1),
-      (right_x, self.right_blinker, 1),
-    ):
-      rl.draw_circle(int(x), int(y), radius, COLORS.TURN_BG)
-      color = COLORS.TURN_ACTIVE if active else COLORS.TURN_INACTIVE
-      inner = 17
-      outer = 22
-      tip_x = x - inner if direction < 0 else x + inner
-      tail_x = x + inner if direction < 0 else x - inner
-      rl.draw_line_ex(rl.Vector2(tail_x, y - outer), rl.Vector2(tip_x, y), 7, color)
-      rl.draw_line_ex(rl.Vector2(tip_x, y), rl.Vector2(tail_x, y + outer), 7, color)
+    margin_x = 2
+    margin_y = 5
+    if self.left_blinker:
+      rl.draw_texture(self._txt_turn_signal_left, int(rect.x + margin_x), int(rect.y + margin_y), rl.WHITE)
+    if self.right_blinker:
+      rl.draw_texture(self._txt_turn_signal_right,
+                      int(rect.x + rect.width - self._txt_turn_signal_right.width - margin_x),
+                      int(rect.y + margin_y), rl.WHITE)
 
   def _draw_gear(self, rect: rl.Rectangle) -> None:
     """Always show the physical P/R/N/D gear in the lower-right corner."""
