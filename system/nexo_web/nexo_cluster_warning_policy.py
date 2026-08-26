@@ -7,7 +7,17 @@ _EXPECTED_PARK_EVENTS = (
   "onroadEvent parkBrake:",
   "onroadEvent wrongCarMode:",
   "onroadEvent pcmDisable:",
+  "onroadEvent locationdTemporaryError:",
 )
+
+
+def _park_event_tokens(report: str) -> tuple[str, ...]:
+  tokens = _EXPECTED_PARK_EVENTS
+  live_comm_ok = '"liveCommOk": true' in report and '"liveCommProblems": []' in report
+  radar_ok = "Radar: canError=False radarFault=False wrongConfig=False temporary=False" in report
+  if live_comm_ok and radar_ok:
+    tokens += ("onroadEvent commIssue:",)
+  return tokens
 
 
 def _is_stationary_park(report: str) -> bool:
@@ -19,11 +29,13 @@ def _is_stationary_park(report: str) -> bool:
 def correct_stationary_cluster_warning(report: str) -> str:
   """Downgrade expected P/standstill entry-block events in the warning section.
 
-  wrongGear, seatbeltNotLatched, parkBrake, wrongCarMode and pcmDisable can all
-  appear while a parked driver runs diagnostics with cruise/main control off.
-  They can block engagement, but in this P/0 km/h context they are not evidence
-  of an SCC/FCA/MDPS/ADAS cluster fault. This function only rewrites diagnostic
-  text and never changes vehicle state, Params, Panda safety, or CAN traffic.
+  Entry-block events and locationdTemporaryError can appear while a parked
+  driver runs diagnostics. A stale commIssue is also downgraded, but only when
+  the unified live-communication check and radar fault fields are both healthy.
+  These events can block engagement, but in this tightly checked P/0 km/h
+  context they are not evidence of an SCC/FCA/MDPS cluster fault. This function
+  only rewrites diagnostic text and never changes vehicle state, Params, Panda
+  safety, or CAN traffic.
   """
   if not _is_stationary_park(report):
     return report
@@ -35,6 +47,7 @@ def correct_stationary_cluster_warning(report: str) -> str:
   section = report[:section_end]
   remainder = report[section_end:]
   lines = section.splitlines()
+  expected_park_events = _park_event_tokens(report)
 
   removed: list[str] = []
   kept_critical = False
@@ -43,10 +56,10 @@ def correct_stationary_cluster_warning(report: str) -> str:
 
   for line in lines:
     stripped = line.strip()
-    if stripped.startswith("- 치명: ") and any(token in stripped for token in _EXPECTED_PARK_EVENTS):
+    if stripped.startswith("- 치명: ") and any(token in stripped for token in expected_park_events):
       removed.append(stripped.removeprefix("- 치명: "))
       continue
-    if stripped.startswith("- 주의: ") and any(token in stripped for token in _EXPECTED_PARK_EVENTS):
+    if stripped.startswith("- 주의: ") and any(token in stripped for token in expected_park_events):
       removed.append(stripped.removeprefix("- 주의: "))
       continue
     if stripped.startswith("- 치명: "):
@@ -80,7 +93,7 @@ def correct_stationary_cluster_warning(report: str) -> str:
     "",
     "[P단 정지에서 정상으로 제외한 항목]",
     *(f"- 정보: {item}" for item in removed),
-    "- 설명: P단·정지·크루즈 비활성 진단에서는 기어·안전벨트·주차브레이크·크루즈 메인 OFF 관련 진입 차단이 정상입니다.",
+    "- 설명: P단·정지·크루즈 비활성 진단에서는 진입 차단·위치정보 일시 오류와 현재 통신이 정상으로 재확인된 과거 commIssue를 계기판 고장으로 판정하지 않습니다.",
     "",
   ]
   output[can_index:can_index] = insertion
