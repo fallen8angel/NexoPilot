@@ -1,5 +1,9 @@
+import json
+import os
 import re
+import subprocess
 from collections import Counter
+from pathlib import Path
 
 from cereal import messaging
 
@@ -16,6 +20,11 @@ PROCESS_LIST_ONLY = re.compile(
   r"(?:\s+(?:radard|hardwared|modem|tombstoned|feedbackd|webrtcd))*$",
   re.IGNORECASE,
 )
+
+MODEM_STATE = Path("/dev/shm/modem")
+TAILSCALE_DIR = Path("/data/tailscale")
+TAILSCALE_BIN = TAILSCALE_DIR / "tailscale"
+TAILSCALE_SOCKET = TAILSCALE_DIR / "tailscaled.sock"
 
 
 def important_log_output(tmux_output) -> str:
@@ -138,6 +147,163 @@ def _correct_tx_echo_verdict(output: str) -> str:
   return output
 
 
+def _run_readonly(command: list[str], timeout: float = 1.5) -> tuple[int, str]:
+  try:
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    output = (result.stdout or result.stderr or "").strip()
+    return result.returncode, output[:12000]
+  except (OSError, subprocess.SubprocessError) as error:
+    return -1, str(error)
+
+
+def _modem_snapshot() -> dict[str, object]:
+  safe_keys = (
+    "state", "connected", "ip_address", "mcc_mnc", "signal_strength", "signal_quality",
+    "network_type", "operator", "band", "channel", "registration", "extra", "tx_bytes", "rx_bytes",
+  )
+  try:
+    raw = json.loads(MODEM_STATE.read_text(encoding="utf-8", errors="replace"))
+    if not isinstance(raw, dict):
+      return {"available": False, "error": "invalid modem state"}
+    return {"available": True, **{key: raw.get(key) for key in safe_keys}}
+  except Exception as error:
+    return {"available": False, "error": str(error)}
+
+
+def _remote_access_report() -> str:
+  reasons: list[str] = []
+  warnings: list[str] = []
+  modem = _modem_snapshot()
+
+  ppp0 = Path("/sys/class/net/ppp0").exists()
+  tailscale0 = Path("/sys/class/net/tailscale0").exists()
+  wlan0 = Path("/sys/class/net/wlan0").exists()
+  socket_exists = TAILSCALE_SOCKET.exists()
+
+  proc_code, proc_out = _run_readonly(["pgrep", "-a", "tailscaled"], timeout=0.8)
+  tailscaled_running = proc_code == 0 and bool(proc_out)
+
+  ip_code, ip_out = _run_readonly(["ip", "-br", "addr"], timeout=0.8)
+  route_code, route_out = _run_readonly(["ip", "route"], timeout=0.8)
+  rule_code, rule_out = _run_readonly(["ip", "rule"], timeout=0.8)
+  listen_code, listen_out = _run_readonly(["ss", "-lnt"], timeout=0.8)
+
+  ts_ip = ""
+  if tailscale0:
+    ts_code, ts_out = _run_readonly(["ip", "-4", "-o", "addr", "show", "dev", "tailscale0"], timeout=0.8)
+    if ts_code == 0:
+      match = re.search(r"\binet\s+(100\.\d+\.\d+\.\d+)/", ts_out)
+      if match:
+        ts_ip = match.group(1)
+
+  web7000_listening = listen_code == 0 and bool(re.search(r"(?m)\b(?:0\.0\.0\.0|\*|\[::\]):7000\b", listen_out))
+  ssh22_listening = listen_code == 0 and bool(re.search(r"(?m)\b(?:0\.0\.0\.0|\*|\[::\]):22\b", listen_out))
+
+  lte_ping_ok = False
+  if ppp0:
+    ping_code, _ = _run_readonly(["ping", "-I", "ppp0", "-c", "1", "-W", "1", "1.1.1.1"], timeout=1.8)
+    lte_ping_ok = ping_code == 0
+
+  tailscale_cli_ok = False
+  if tailscaled_running and socket_exists and TAILSCALE_BIN.is_file():
+    ts_status_code, _ = _run_readonly(
+      [str(TAILSCALE_BIN), f"--socket={TAILSCALE_SOCKET}", "status"],
+      timeout=1.2,
+    )
+    tailscale_cli_ok = ts_status_code == 0
+
+  firewall_code, firewall_out = _run_readonly(
+    ["sudo", "-n", "iptables-legacy", "-S", "INPUT"],
+    timeout=1.0,
+  )
+  input_drop = firewall_code == 0 and "-P INPUT DROP" in firewall_out
+  tailscale_accept = firewall_code == 0 and any(
+    "tailscale0" in line and "-j ACCEPT" in line for line in firewall_out.splitlines()
+  )
+
+  if not modem.get("available"):
+    reasons.append("modem_state_missing")
+  elif modem.get("connected") is not True:
+    reasons.append("modem_not_connected")
+
+  if not ppp0:
+    reasons.append("ppp0_missing")
+  elif not lte_ping_ok:
+    reasons.append("lte_internet_failed")
+
+  if not tailscaled_running:
+    reasons.append("tailscaled_not_running")
+    warnings.append("재부팅 뒤 tailscaled 자동 실행이 안 된 가능성이 큽니다.")
+  if not socket_exists:
+    reasons.append("tailscale_socket_missing")
+  if not tailscale0:
+    reasons.append("tailscale0_missing")
+  if tailscale0 and not ts_ip:
+    reasons.append("tailscale_ip_missing")
+  if tailscaled_running and socket_exists and TAILSCALE_BIN.is_file() and not tailscale_cli_ok:
+    reasons.append("tailscale_control_unreachable")
+
+  if not web7000_listening:
+    reasons.append("web7000_not_listening")
+  if not ssh22_listening:
+    reasons.append("ssh22_not_listening")
+  if input_drop and not tailscale_accept:
+    reasons.append("firewall_blocks_tailscale")
+
+  ready = not reasons
+  if ready:
+    verdict = "정상: LTE·Tailscale·7000/SSH 원격 접속 조건이 모두 확인됐습니다."
+  elif "tailscaled_not_running" in reasons:
+    verdict = "원격 접속 불가: Tailscale 데몬이 실행 중이 아닙니다. 부팅 자동 실행 여부를 우선 확인하세요."
+  elif "ppp0_missing" in reasons or "modem_not_connected" in reasons:
+    verdict = "원격 접속 불가: 차량 LTE 데이터 연결이 올라오지 않았습니다."
+  elif "web7000_not_listening" in reasons:
+    verdict = "원격 접속 불가: NexoPilot 7000 서버가 열려 있지 않습니다."
+  elif "firewall_blocks_tailscale" in reasons:
+    verdict = "원격 접속 불가: INPUT 방화벽이 tailscale0 트래픽을 허용하지 않습니다."
+  else:
+    verdict = "원격 접속 불가 후보가 감지됐습니다. 아래 원인 코드와 네트워크 상태를 확인하세요."
+
+  modem_summary = (
+    f"state={modem.get('state')} connected={modem.get('connected')} "
+    f"registration={modem.get('registration')} network={modem.get('network_type')} "
+    f"operator={modem.get('operator')} signal={modem.get('signal_strength')}/{modem.get('signal_quality')} "
+    f"ip={modem.get('ip_address')}"
+    if modem.get("available") else f"읽기 실패: {modem.get('error', 'unknown')}"
+  )
+
+  lines = [
+    "",
+    "============================================================",
+    "원격 접속·LTE·Tailscale 진단",
+    "============================================================",
+    f"REMOTE_READY: {'YES' if ready else 'NO'}",
+    f"판정: {verdict}",
+    f"원인 코드: {', '.join(reasons) if reasons else '없음'}",
+    *(f"주의: {warning}" for warning in warnings),
+    "",
+    f"모뎀: {modem_summary}",
+    f"인터페이스: ppp0={ppp0} tailscale0={tailscale0} wlan0={wlan0}",
+    f"Tailscale: process={tailscaled_running} socket={socket_exists} cli={tailscale_cli_ok} ip={ts_ip or '없음'}",
+    f"서비스 포트: 7000={web7000_listening} 22={ssh22_listening}",
+    f"LTE 인터넷 ping(1.1.1.1): {'OK' if lte_ping_ok else 'FAIL/미실행'}",
+    f"방화벽: legacy조회={'OK' if firewall_code == 0 else 'FAIL'} INPUT_DROP={input_drop} tailscale0_ACCEPT={tailscale_accept}",
+    "",
+    "[ip -br addr]",
+    ip_out if ip_code == 0 else f"실패: {ip_out}",
+    "",
+    "[ip route]",
+    route_out if route_code == 0 else f"실패: {route_out}",
+    "",
+    "[ip rule]",
+    rule_out if rule_code == 0 else f"실패: {rule_out}",
+    "",
+    "※ ICCID·IMEI·Tailscale 인증 URL·계정 토큰은 진단 파일에 기록하지 않습니다.",
+    "※ 이 원격 접속 검사는 읽기 전용이며 네트워크·방화벽 설정을 변경하지 않습니다.",
+  ]
+  return "\n".join(lines)
+
+
 def annotate_blackbox(output: str) -> str:
   output = _correct_tx_echo_verdict(output)
   active = bool(re.search(r"selfdrive=[^\n]*/True(?:/|\s)", output))
@@ -153,4 +319,4 @@ def annotate_blackbox(output: str) -> str:
     if line.startswith(marker):
       lines.insert(index + 1, verdict)
       break
-  return "\n".join(lines)
+  return "\n".join(lines) + "\n" + _remote_access_report() + "\n"
