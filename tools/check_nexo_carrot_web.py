@@ -10,18 +10,21 @@ WEB = ROOT / "system/nexo_web/web.py"
 UI = ROOT / "system/nexo_web/web_carrot_ui.py"
 HUD = ROOT / "system/nexo_web/web_hud_ui.py"
 REMOTE = ROOT / "system/nexo_web/web_remote_ui.py"
+DEVICE = ROOT / "system/nexo_web/web_device_ui.py"
 PARAMS = ROOT / "common/params_keys.h"
 
 web = WEB.read_text(encoding="utf-8")
 ui = UI.read_text(encoding="utf-8")
 hud = HUD.read_text(encoding="utf-8")
 remote = REMOTE.read_text(encoding="utf-8")
+device = DEVICE.read_text(encoding="utf-8")
 params = PARAMS.read_text(encoding="utf-8")
 
 ast.parse(web, filename=str(WEB))
 ast.parse(ui, filename=str(UI))
 ast.parse(hud, filename=str(HUD))
 ast.parse(remote, filename=str(REMOTE))
+ast.parse(device, filename=str(DEVICE))
 
 required_ui = (
   "CARROT-STYLE SETTINGS",
@@ -141,6 +144,9 @@ required_web = (
   'parsed.path == "/remote"',
   "remote_ui.remote_page(core)",
   "stationary_gate",
+  "update_complete_page",
+  'parsed.path == "/update/reboot"',
+  '_parked_gate(require_parking_brake=False)',
   "core.TOGGLES = list(carrot_ui.TOGGLES)",
   'server_version = "NexoPilotWeb/7.8"',
   'Params().put("LongitudinalPersonality", personality)',
@@ -148,6 +154,14 @@ required_web = (
 for token in required_web:
   if token not in web:
     raise SystemExit(f"Carrot-style web wiring missing token: {token}")
+
+for token in (
+  '<form method="post" action="/update"><button>업데이트 설치</button></form>',
+  "주차브레이크는 필요하지 않습니다.",
+  "설치가 끝나면 지금 재부팅할지 선택할 수 있습니다.",
+):
+  if token not in device:
+    raise SystemExit(f"Port 7000 update/reboot UI missing token: {token}")
 
 # LongitudinalPersonality is registered as an INT Param. Passing str(...) used
 # to trigger params_pyx's runtime type checker on the live 7000 settings page.
