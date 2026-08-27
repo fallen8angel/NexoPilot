@@ -173,6 +173,14 @@ class Car:
     self.nexo_last_heartbeat = 0.0
     self.nexo_restore_attempted = False
     if self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN":
+      if self.CP.openpilotLongitudinalControl:
+        # ControlsReady can survive a card-only hot restart. Clear the previous
+        # process handshake before touching stock SCC so pandad drops the old
+        # Hyundai LONG safety mode. It is set again only after init completes
+        # and physical source-0 SCC silence has been verified.
+        self.params.put_bool("ControlsReady", False, block=True)
+        cloudlog.warning("NEXO longitudinal startup: ControlsReady cleared pending verified takeover")
+
       # Repair an interrupted prior takeover before this process can attempt a
       # new one. With no marker this is inert, including in normal stock cruise.
       self._restore_nexo_stock_scc_if_pending("card startup stale takeover")
