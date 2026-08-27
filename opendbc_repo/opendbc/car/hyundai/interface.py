@@ -465,7 +465,7 @@ class CarInterface(CarInterfaceBase):
           raise
 
         _set_nexo_takeover_marker("longitudinal_takeover_ready")
-        _trace_nexo_long_init("DONE NEXO radar-then-disable sequence; physical source0 silence verified; runtime SCC guard armed by card")
+        _trace_nexo_long_init("DONE NEXO radar-then-disable sequence; physical src0 silence verified; runtime SCC guard armed by card")
       else:
         disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
