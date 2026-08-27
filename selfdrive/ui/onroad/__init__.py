@@ -1,3 +1,6 @@
+from dataclasses import replace
+
+
 def _is_nexo(module) -> bool:
   cp = module.ui_state.CP
   fingerprint = getattr(cp, "carFingerprint", None) if cp is not None else None
@@ -71,8 +74,26 @@ def _patch_opkr_blind_spot(module) -> None:
   ModelRenderer._nexo_opkr_blind_spot_patched = True
 
 
+def _patch_compact_gear_hud(module) -> None:
+  """Shrink the lower-right P/R/N/D tile to the user-requested compact size."""
+  if getattr(module, "_nexo_compact_gear_patched", False):
+    return
+
+  # The previous 70 x 80 tile was visually too large. Keep the existing
+  # lower-right placement but reduce the box and glyph to about half size.
+  module.UI_CONFIG = replace(module.UI_CONFIG, gear_box_width=36, gear_box_height=42)
+  module.FONT_SIZES = replace(module.FONT_SIZES, gear=34)
+  module._nexo_compact_gear_patched = True
+
+
 try:
   from openpilot.selfdrive.ui.onroad import model_renderer as _model_renderer
   _patch_opkr_blind_spot(_model_renderer)
 except Exception as e:
   print(f"NEXO blind-spot patch failed: {e}")
+
+try:
+  from openpilot.selfdrive.ui.onroad import hud_renderer as _hud_renderer
+  _patch_compact_gear_hud(_hud_renderer)
+except Exception as e:
+  print(f"NEXO compact gear HUD patch failed: {e}")
