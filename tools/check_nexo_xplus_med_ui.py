@@ -20,14 +20,16 @@ for path, source in (
 ):
   ast.parse(source, filename=path)
 
-# XPlus-style NEXO MED must start ready, remember MAIN/lateral selection through
-# P/N/R, drop speed control outside D/L, and never bypass disable/gear actuation gates.
+# NEXO MED must start disarmed, remember an explicit MAIN/lateral selection
+# through P/N/R, drop speed control outside D/L, require a MODE re-arm after a
+# real disable, and never bypass disable/gear actuation gates.
 for token in (
-  "self.nexo_med_lateral = self.nexo_med",
+  "self.nexo_med_lateral = False",
+  "self.nexo_med_rearm_required = False",
   "if not driving_gear:",
   "self.nexo_med_speed = False",
   '_onroad_event_name(e) != "wrongGear"',
-  "med_actuation_allowed = self.nexo_med and self.nexo_med_lateral and driving_gear and not disable_events",
+  "not self.nexo_med_rearm_required and",
   "longitudinal_requested = longitudinal_requested and self.nexo_med_speed and driving_gear and not disable_events",
   "Two-stage CANCEL: SPEED -> MED, then MED -> OFF.",
 ):
@@ -57,4 +59,4 @@ for token in (
   if token not in hud:
     raise SystemExit(f"NEXO XPlus HUD contract missing: {token}")
 
-print("NEXO XPlus MED/startup/Home/turn/EXP/gear UI contract PASS")
+print("NEXO MED/startup/Home/turn/EXP/gear UI contract PASS")
