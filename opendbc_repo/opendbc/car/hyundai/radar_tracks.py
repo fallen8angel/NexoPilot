@@ -11,6 +11,19 @@ RADAR_QUERY_TIMEOUT = 0.1
 RADAR_QUERY_TOTAL_TIMEOUT = 0.35
 NEXO_LONG_INIT_LOG = "/data/nexo_long_init.log"
 
+# NEXO radar tracks are parsed on physical bus 1. A hot card restart can happen
+# while the radar is still in the already-programmed track mode from the same
+# ignition cycle. In that state the ECU may stop answering a repeated 0x10 07
+# request even though all 32 track messages are still streaming normally.
+# Require broad, live coverage of the track address range before treating the
+# existing session as usable; one colliding CAN address is never sufficient.
+RADAR_TRACK_START_ADDR = 0x500
+RADAR_TRACK_MSG_COUNT = 32
+RADAR_TRACK_RX_BUS = 1
+RADAR_TRACK_PRECHECK_DURATION_S = 0.30
+RADAR_TRACK_PRECHECK_MIN_UNIQUE = 24
+RADAR_TRACK_PRECHECK_MIN_FRAMES = 48
+
 
 def _trace_radar_uds(message: str) -> None:
   try:
@@ -69,15 +82,72 @@ def _query(can_recv, can_send, bus, request, response, timeout=RADAR_QUERY_TIMEO
     raise
 
 
-def enable_radar_tracks(can_recv, can_send, bus, retries=40) -> bool:
-  """Enable NEXO MANDO radar tracks using the proven NEXOdriveAI order.
+def _observe_radar_track_stream(can_recv, *, duration_s: float = RADAR_TRACK_PRECHECK_DURATION_S,
+                                source: int = RADAR_TRACK_RX_BUS,
+                                min_unique: int = RADAR_TRACK_PRECHECK_MIN_UNIQUE,
+                                min_frames: int = RADAR_TRACK_PRECHECK_MIN_FRAMES) -> tuple[bool, int, int]:
+  """Verify that a broad set of NEXO radar-track frames is live right now.
 
-  disable_ecu() has already entered extended diagnostics (0x10 03) and sent
-  communication control (0x28 83 01). Match NEXOdriveAI by entering the radar
-  configuration session (0x10 07) and writing DID 0x0142 immediately after it.
-  Do not issue a read-back or a second communication-control request here since
-  either can change the session state on older NEXO radar firmware.
+  This is intentionally stricter than seeing a single 0x500-range address since
+  SCC13 and other traffic can overlap the numeric range on other buses. Only the
+  dedicated radar receive bus is counted, and a majority of the 32 track IDs
+  must be observed repeatedly before a hot restart may skip UDS programming.
   """
+  try:
+    # Discard stale queued data so the decision is based on current traffic.
+    can_recv(wait_for_one=False)
+  except Exception:
+    pass
+
+  deadline = time.monotonic() + max(0.01, duration_s)
+  frames = 0
+  addresses: set[int] = set()
+
+  try:
+    while time.monotonic() < deadline:
+      for batch in can_recv(wait_for_one=True):
+        for message in batch:
+          if int(getattr(message, "src", -1)) != source:
+            continue
+          address = int(getattr(message, "address", -1))
+          if RADAR_TRACK_START_ADDR <= address < RADAR_TRACK_START_ADDR + RADAR_TRACK_MSG_COUNT:
+            frames += 1
+            addresses.add(address)
+
+      if frames >= min_frames and len(addresses) >= min_unique:
+        return True, frames, len(addresses)
+  except Exception as error:
+    _trace_radar_uds(
+      f"RADAR PRECHECK observation failed source={source} frames={frames} unique={len(addresses)} "
+      f"detail={type(error).__name__}: {error}"
+    )
+    return False, frames, len(addresses)
+
+  return False, frames, len(addresses)
+
+
+def enable_radar_tracks(can_recv, can_send, bus, retries=40) -> bool:
+  """Enable NEXO MANDO radar tracks without breaking a healthy hot-restart session.
+
+  A fresh ignition normally needs the proven NEXOdriveAI sequence: enter radar
+  configuration session (0x10 07) and write DID 0x0142. During a card-process
+  restart in the same ignition cycle, however, the radar can keep streaming all
+  32 configured tracks while no longer acknowledging another 0x10 07 request.
+  Prove the live track stream first and skip redundant UDS programming only in
+  that already-active case. Otherwise run the normal bounded UDS sequence.
+  """
+  already_active, precheck_frames, precheck_unique = _observe_radar_track_stream(can_recv)
+  _trace_radar_uds(
+    f"RADAR PRECHECK active={already_active} source={RADAR_TRACK_RX_BUS} "
+    f"frames={precheck_frames} unique={precheck_unique}/{RADAR_TRACK_MSG_COUNT}"
+  )
+  if already_active:
+    carlog.info(
+      f"NEXO radar tracks already streaming on bus {RADAR_TRACK_RX_BUS}; "
+      "skipping redundant radar UDS programming"
+    )
+    return True
+
   for attempt in range(1, retries + 1):
     try:
       session = _query(can_recv, can_send, bus, b"\x10\x07", b"\x50\x07")
