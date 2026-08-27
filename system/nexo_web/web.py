@@ -55,6 +55,8 @@ from system.nexo_web import web_diagnostics_patch as diagnostics
 _original_diagnostic_page = core.diagnostic_page
 _original_live_page = core.live_page
 _original_handler = core.Handler
+_last_diagnostic_lock = threading.Lock()
+_last_diagnostic: tuple[str, str] | None = None
 remote_ui.install(carrot_ui)
 
 
@@ -84,7 +86,7 @@ def diagnostic_page(message: str = "") -> str:
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 8초 통합진단</title><style>{carrot_ui._css(core)}</style></head><body><main>
   <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>8초 통합진단</h1><div class="mini">차량 상태와 주요 오류를 8초 동안 읽기 전용으로 수집합니다.</div></div>
   {carrot_ui._message(message)}
-  <div class="card"><div class="title">통합진단 파일</div><div class="desc">P단 정지 상태에서 실행하면 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태와 오류를 파일 하나로 저장합니다. 차량 제어에는 관여하지 않습니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form><form method="post" action="/diagnostics/capture"><button class="secondary">진단 다시 다운받기</button></form><div class="desc">다시 다운받기를 누르면 현재 상태를 기준으로 새로운 8초 진단을 다시 수집합니다.</div></div>
+  <div class="card"><div class="title">통합진단 파일</div><div class="desc">P단 정지 상태에서 실행하면 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태와 오류를 파일 하나로 저장합니다. 차량 제어에는 관여하지 않습니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form><form method="post" action="/diagnostics/download-last"><button class="secondary">방금 진단 파일 다시 다운받기</button></form><div class="desc">다시 다운받기는 새로 8초를 수집하지 않고, 방금 완료된 동일한 진단 파일을 다시 내려받습니다.</div></div>
   {carrot_ui._nav("diagnostics")}</main></body></html>'''
 
 def live_page() -> str:
@@ -251,6 +253,29 @@ class CarrotStyleHandler(_original_handler):
 
   def do_POST(self) -> None:
     parsed = urlparse(self.path)
+
+    if parsed.path in ("/diagnostics/capture", "/diagnostics/download-last"):
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+
+      global _last_diagnostic
+      if parsed.path == "/diagnostics/capture":
+        capture = longitudinal_blackbox_output()
+        filename = f"nexo-long-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+        with _last_diagnostic_lock:
+          _last_diagnostic = (capture, filename)
+        self._send_download(capture, filename)
+        return
+
+      with _last_diagnostic_lock:
+        last_diagnostic = _last_diagnostic
+      if last_diagnostic is None:
+        self._redirect("먼저 8초 통합진단을 한 번 실행해 주세요.", "/diagnostics")
+        return
+      capture, filename = last_diagnostic
+      self._send_download(capture, filename)
+      return
 
     # Software updates use the normal parked gate: P, fully stopped and cruise off.
     # Physical device actions still require the stricter EPB gate.
