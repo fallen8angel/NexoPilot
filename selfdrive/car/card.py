@@ -125,6 +125,23 @@ class Car:
 
     self.params = Params()
 
+    # A card-only hot restart can leave pandad in the previous Hyundai LONG
+    # safety mode while factory SCC is already transmitting. Reset the old
+    # handshake before waiting for the first CAN packet/fingerprinting so the
+    # Panda returns to diagnostic-safe mode before SCC traffic is evaluated.
+    preflight_params_raw = self.params.get("CarParamsCache")
+    if preflight_params_raw is None:
+      preflight_params_raw = self.params.get("CarParamsPersistent")
+    if preflight_params_raw is not None:
+      try:
+        with car.CarParams.from_bytes(preflight_params_raw) as preflight_params:
+          if (preflight_params.carFingerprint == "HYUNDAI_NEXO_1ST_GEN" and
+              preflight_params.openpilotLongitudinalControl):
+            self.params.put_bool("ControlsReady", False, block=True)
+            cloudlog.warning("NEXO pre-fingerprint safety reset: ControlsReady cleared")
+      except Exception as error:
+        cloudlog.warning(f"NEXO pre-fingerprint CarParams inspection failed: {error}")
+
     self.can_callbacks = can_comm_callbacks(self.can_sock, self.pm.sock['sendcan'])
 
     is_release = self.params.get_bool("IsReleaseBranch")
