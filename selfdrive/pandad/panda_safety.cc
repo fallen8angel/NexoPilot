@@ -3,6 +3,20 @@
 #include "common/swaglog.h"
 
 void PandaSafety::configureSafetyMode(bool is_onroad) {
+  // A NEXO card hot restart can leave ControlsReady=true from the previous
+  // process while factory SCC communication is being restored. Drop the old
+  // LONG safety mode as soon as card clears ControlsReady, before stock SCC can
+  // be mistaken for a relay malfunction. The normal handshake below selects
+  // ELM327 while fingerprint/UDS work runs and restores LONG only after the new
+  // takeover has been physically verified.
+  if (is_onroad && safety_configured_ && !params_.getBool("ControlsReady")) {
+    LOGW("ControlsReady cleared, returning Panda to pre-control safety mode");
+    panda_->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT);
+    initialized_ = false;
+    safety_configured_ = false;
+    log_once_ = false;
+  }
+
   if (is_onroad && !safety_configured_) {
     updateMultiplexingMode();
 
