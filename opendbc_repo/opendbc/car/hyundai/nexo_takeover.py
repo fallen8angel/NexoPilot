@@ -156,7 +156,13 @@ def _suppress_once(can_recv, can_send, *, bus: int, addr: int, communication_con
     observation = {"source0_frames": 0, "source0_scc_total": 0, "source0_scc_counts": {}}
 
   enough_bus_data = int(observation["source0_frames"]) >= min_source0_frames
-  success = acknowledged and enough_bus_data and int(observation["source0_scc_total"]) == 0
+  # 0x28 0x83 0x01 suppresses the positive UDS response. On NEXO an ECU can
+  # therefore be physically silent even when disable_ecu() cannot report an
+  # acknowledgement. Treat the live source-0 bus observation as authoritative:
+  # the bus itself must be alive and every stock SCC/FCA stream must be absent.
+  # The longer stability window and runtime guard below still fail closed if
+  # factory SCC returns after takeover.
+  success = enough_bus_data and int(observation["source0_scc_total"]) == 0
   return {
     "label": label,
     "acknowledged": acknowledged,
