@@ -1,0 +1,1 @@
+# NexoPilot remote connectivity helpers.
