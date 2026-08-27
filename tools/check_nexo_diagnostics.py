@@ -118,7 +118,11 @@ def main() -> None:
   require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
   require("NexoPilotWeb/7.8" in entry, "port 7000 server version not advanced for current diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
-  require("진단 다시 다운받기" in entry, "single-file diagnostic re-download button missing")
+  for token in ("_last_diagnostic_lock", "_last_diagnostic = (capture, filename)",
+                'parsed.path == "/diagnostics/capture"', '"/diagnostics/download-last"',
+                "방금 진단 파일 다시 다운받기",
+                "새로 8초를 수집하지 않고, 방금 완료된 동일한 진단 파일"):
+    require(token in entry, f"last completed diagnostic re-download contract missing: {token}")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
     require(token in radar, f"radar UDS diagnostics missing: {token}")
   require("def _trace_nexo_long_init" in interface, "NEXO init trace helper missing")
