@@ -21,7 +21,7 @@ Delegated validation contract retained for the NEXO integration checker:
   MAX_REQUEST_BODY
 """
 
-import os
+import html
 import socket
 import threading
 import time
@@ -91,6 +91,16 @@ def live_page() -> str:
   return carrot_ui.enhance_legacy_page(core, _original_live_page(), "camera")
 
 
+def update_complete_page(message: str) -> str:
+  """Show an explicit reboot choice after a successful update."""
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 업데이트 완료</title><style>{carrot_ui._css(core)}</style></head><body><main>
+  <div class="hero"><div class="eyebrow">UPDATE COMPLETE</div><h1>업데이트 설치 완료</h1><div class="mini">{html.escape(message)}</div></div>
+  <div class="card"><h2>지금 재부팅하시겠습니까?</h2><div class="desc">예를 누르면 즉시 재부팅하여 새 코드를 적용합니다. 아니요를 누르면 현재 화면으로 돌아가며 다음 재부팅부터 적용됩니다.</div>
+  <form method="post" action="/update/reboot"><button>예 · 지금 재부팅</button></form>
+  <a href="/device"><button class="secondary">아니요 · 나중에 재부팅</button></a></div>
+  {carrot_ui._nav("device")}</main></body></html>'''
+
+
 # Keep the verified NEXO-only semantics while matching the useful standard
 # Carrot settings menu. Unsupported Carrot tuning parameters are deliberately
 # not exposed by port 7000.
@@ -100,14 +110,6 @@ core.raw_can_diagnostic_output = raw_can_diagnostic_output
 core.longitudinal_blackbox_output = longitudinal_blackbox_output
 core.diagnostic_page = diagnostic_page
 core.live_page = live_page
-
-
-def schedule_web_restart(delay: float = 0.75) -> None:
-  """Restart only port 7000 after a successful code update."""
-  def restart() -> None:
-    time.sleep(delay)
-    os._exit(0)
-  threading.Thread(target=restart, daemon=True).start()
 
 
 def _parked_gate(require_parking_brake: bool = False) -> tuple[bool, str]:
@@ -260,10 +262,23 @@ class CarrotStyleHandler(_original_handler):
         return
       ok, result = core.perform_update()
       if ok:
-        result = f"{result} 업데이트를 설치했습니다. 새 코드는 다음 재부팅부터 적용됩니다."
+        self._send(update_complete_page(
+          f"{result} 업데이트를 설치했습니다. 새 코드는 재부팅 후 적용됩니다."
+        ))
+      else:
+        self._redirect(result, "/device")
+      return
+
+    if parsed.path == "/update/reboot":
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      # This is the continuation of the already verified update flow, so P,
+      # zero speed and inactive controls are sufficient; EPB is not required.
+      if not self._require_parked("/device"):
+        return
+      _, result = device_ui.perform_device_action("reboot")
       self._redirect(result, "/device")
-      if ok:
-        schedule_web_restart()
       return
 
     safe_redirects = {
