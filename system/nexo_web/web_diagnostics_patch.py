@@ -240,8 +240,12 @@ def _remote_access_report() -> str:
     reasons.append("tailscale0_missing")
   if tailscale0 and not ts_ip:
     reasons.append("tailscale_ip_missing")
+  tailscale_data_ready = tailscaled_running and socket_exists and tailscale0 and bool(ts_ip)
   if tailscaled_running and socket_exists and TAILSCALE_BIN.is_file() and not tailscale_cli_ok:
-    reasons.append("tailscale_control_unreachable")
+    if tailscale_data_ready and web7000_listening:
+      warnings.append("Tailscale 제어 CLI 응답은 없지만 tailscale0 주소와 7000 데이터 경로는 준비됨")
+    else:
+      reasons.append("tailscale_control_unreachable")
 
   if not web7000_listening:
     reasons.append("web7000_not_listening")
@@ -251,7 +255,9 @@ def _remote_access_report() -> str:
     reasons.append("firewall_blocks_tailscale")
 
   ready = not reasons
-  if ready:
+  if ready and not tailscale_cli_ok:
+    verdict = "정상 후보: Tailscale 데이터 경로와 7000 서버가 준비됐습니다. 제어 CLI 상태 조회만 응답하지 않았습니다."
+  elif ready:
     verdict = "정상: LTE·Tailscale·7000/SSH 원격 접속 조건이 모두 확인됐습니다."
   elif "tailscaled_not_running" in reasons:
     verdict = "원격 접속 불가: Tailscale 데몬이 실행 중이 아닙니다. 부팅 자동 실행 여부를 우선 확인하세요."
