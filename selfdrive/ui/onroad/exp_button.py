@@ -12,6 +12,8 @@ class ExpButton(Widget):
     self._params = Params()
     self._experimental_mode: bool = False
     self._engageable: bool = False
+    self._cruise_active: bool = False
+    self._steering_angle_deg: float = 0.0
 
     # State hold mechanism
     self._hold_duration = 2.0  # seconds
@@ -19,9 +21,9 @@ class ExpButton(Widget):
     self._hold_end_time: float | None = None
 
     self._white_color: rl.Color = rl.Color(255, 255, 255, 255)
+    self._active_green: rl.Color = rl.Color(0, 255, 0, 255)
     self._black_bg: rl.Color = rl.Color(0, 0, 0, 166)
     self._txt_wheel: rl.Texture = gui_app.texture('icons/chffr_wheel.png', icon_size, icon_size)
-    self._txt_exp: rl.Texture = gui_app.texture('icons/experimental.png', icon_size, icon_size)
     self._rect = rl.Rectangle(0, 0, button_size, button_size)
 
   def set_rect(self, rect: rl.Rectangle) -> None:
@@ -29,8 +31,13 @@ class ExpButton(Widget):
 
   def _update_state(self) -> None:
     selfdrive_state = ui_state.sm["selfdriveState"]
+    car_state = ui_state.sm["carState"]
     self._experimental_mode = selfdrive_state.experimentalMode
     self._engageable = selfdrive_state.engageable or selfdrive_state.enabled
+    self._cruise_active = bool(
+      selfdrive_state.enabled or selfdrive_state.active or car_state.cruiseState.enabled
+    )
+    self._steering_angle_deg = float(car_state.steeringAngleDeg)
 
   def _handle_mouse_release(self, _):
     super()._handle_mouse_release(_)
@@ -46,11 +53,20 @@ class ExpButton(Widget):
     center_x = int(self._rect.x + self._rect.width // 2)
     center_y = int(self._rect.y + self._rect.height // 2)
 
-    self._white_color.a = 180 if self.is_pressed or not self._engageable else 255
+    icon_color = self._active_green if self._cruise_active else self._white_color
+    icon_color.a = 180 if self.is_pressed else 255
 
-    texture = self._txt_exp if self._held_or_actual_mode() else self._txt_wheel
+    # Keep the wheel centered while rotating with the physical steering angle.
+    # EXP remains visible through HudRenderer's separate badge, so this status
+    # icon can consistently represent steering and cruise state.
+    texture = self._txt_wheel
+    size = float(texture.width)
+    source = rl.Rectangle(0.0, 0.0, float(texture.width), float(texture.height))
+    destination = rl.Rectangle(float(center_x), float(center_y), size, float(texture.height))
+    origin = rl.Vector2(size / 2.0, float(texture.height) / 2.0)
+    rotation = max(-180.0, min(180.0, -self._steering_angle_deg))
     rl.draw_circle(center_x, center_y, self._rect.width / 2, self._black_bg)
-    rl.draw_texture_ex(texture, rl.Vector2(center_x - texture.width / 2, center_y - texture.height / 2), 0.0, 1.0, self._white_color)
+    rl.draw_texture_pro(texture, source, destination, origin, rotation, icon_color)
 
   def _held_or_actual_mode(self):
     now = time.monotonic()
