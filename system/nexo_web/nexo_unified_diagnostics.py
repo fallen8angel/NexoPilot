@@ -398,6 +398,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   experimental_live = services.get("selfdriveState", {}).get("experimentalMode")
   cc_info = services.get("carControl", {})
   experimental_match = experimental_param is not None and experimental_live is experimental_param
+  fca_disabled = long_enabled and bool(re.search(r"FCA_Status=0", report))
 
   init_section = _section(report, "롱컨 초기화·UDS 추적")
   runtime_section = _section(report, "card 런타임 상태")
@@ -446,6 +447,11 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     warnings.append("현재 핵심 서비스 통신 이상: " + "; ".join(live_comm_bad))
   if experimental_param is not None and not experimental_match:
     warnings.append(f"실험 모드 설정과 실제 상태 불일치: param={experimental_param}, live={experimental_live}")
+  if fca_disabled:
+    fca_reason = "FCA_Status=0: 순정 전방충돌방지/AEB 비활성 상태"
+    warnings.append(fca_reason)
+    if first_error == "없음":
+      first_error = fca_reason
 
   # Missing legacy heartbeat Params is informational when the live card process
   # and a fresh, valid carState already prove the card loop is healthy.
