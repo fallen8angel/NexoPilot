@@ -23,6 +23,7 @@ from openpilot.system.hardware.hw import Paths
 
 
 SELFDRIVED_SAFE_RESTART_COOLDOWN = 10.0
+SELFDRIVED_PUBLISHER_RELEASE_GRACE = 1.0
 
 
 def manager_init() -> None:
@@ -178,8 +179,14 @@ def manager_thread() -> None:
             f"Restarting crashed selfdrived at safe stop: vEgo={float(cs.vEgo):.3f} "
             f"gear={cs.gearShifter} brakePressed={bool(cs.brakePressed)} cruiseEnabled={bool(cs.cruiseState.enabled)}"
           )
-          selfdrived.restart()
-          selfdrived_restart_at = now
+          # Reap the crashed child first, then allow msgq to release the old
+          # selfdriveState publisher before constructing a replacement. An
+          # immediate stop/start can leave the endpoint owned briefly and the
+          # replacement crashes with MultiplePublishersError.
+          selfdrived.stop()
+          time.sleep(SELFDRIVED_PUBLISHER_RELEASE_GRACE)
+          selfdrived.start()
+          selfdrived_restart_at = time.monotonic()
 
     ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore)
 
