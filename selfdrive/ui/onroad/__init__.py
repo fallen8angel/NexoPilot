@@ -79,10 +79,11 @@ def _patch_compact_gear_hud(module) -> None:
   if getattr(module, "_nexo_compact_gear_patched", False):
     return
 
-  # The previous 70 x 80 tile was visually too large. Keep the existing
-  # lower-right placement but reduce the box and glyph to about half size.
-  module.UI_CONFIG = replace(module.UI_CONFIG, gear_box_width=36, gear_box_height=42)
-  module.FONT_SIZES = replace(module.FONT_SIZES, gear=34)
+  # Match the compact XPlus photo proportions on the standard comma display.
+  # Keep enough height for a clear D/P/R/N glyph while reducing the surrounding
+  # box and the adjacent gap number.
+  module.UI_CONFIG = replace(module.UI_CONFIG, gear_box_width=30, gear_box_height=36)
+  module.FONT_SIZES = replace(module.FONT_SIZES, gear=28, cruise_gap=24)
   module._nexo_compact_gear_patched = True
 
 
