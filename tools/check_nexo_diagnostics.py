@@ -125,7 +125,7 @@ def main() -> None:
   require("warning_diagnostics.prepend_cluster_warning_report" in entry, "cluster warning report not wired")
   require("warning_policy.correct_stationary_cluster_warning" in entry, "park warning policy not wired")
   require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
-  require("NexoPilotWeb/7.8" in entry, "port 7000 server version not advanced for current diagnostics")
+  require("NexoPilotWeb/7.9" in entry, "port 7000 server version not advanced for proxied remote diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   for token in ("_last_diagnostic_lock", "_last_diagnostic = (capture, filename)",
                 'parsed.path == "/diagnostics/capture"', '"/diagnostics/download-last"',
