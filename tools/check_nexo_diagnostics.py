@@ -9,6 +9,7 @@ DIAGNOSTIC_FILES = (
   "selfdrive/car/nexo_diagnostics.py",
   "selfdrive/car/nexo_runtime_diagnostics.py",
   "selfdrive/car/card.py",
+  "system/manager/manager.py",
   "system/nexo_web/web.py",
   "system/nexo_web/nexo_diagnostics_v2.py",
   "system/nexo_web/nexo_unified_diagnostics.py",
@@ -41,6 +42,7 @@ def main() -> None:
   writer = sources["selfdrive/car/nexo_diagnostics.py"]
   card = sources["selfdrive/car/card.py"]
   runtime = sources["selfdrive/car/nexo_runtime_diagnostics.py"]
+  manager = sources["system/manager/manager.py"]
   entry = sources["system/nexo_web/web.py"]
   web = sources["system/nexo_web/nexo_diagnostics_v2.py"]
   unified = sources["system/nexo_web/nexo_unified_diagnostics.py"]
@@ -64,6 +66,10 @@ def main() -> None:
   for token in ("NEXO_CARD_CRASH_LOG", "NEXO_LONG_SUCCESS_LOG", "record_nexo_card_crash",
                 "record_nexo_long_success", "set_nexo_runtime_state", "traceback"):
     require(token in runtime, f"card runtime diagnostics missing: {token}")
+  for token in ("SELFDRIVED_PUBLISHER_RELEASE_GRACE", "selfdrived.stop()",
+                "time.sleep(SELFDRIVED_PUBLISHER_RELEASE_GRACE)", "selfdrived.start()",
+                "MultiplePublishersError"):
+    require(token in manager, f"safe selfdrived publisher restart missing: {token}")
   for token in ("[SCC/FCA 분리 자동 판정]", "[sendcan 요청 → Panda 결과]",
                 "[주요 SCC/FCA 신호 DBC 해석]", "last_fault_output",
                 "runtime_status_output", "card_crash_output", "과거 버전 기록",
@@ -77,7 +83,8 @@ def main() -> None:
                 "상세 원문 - 필요할 때만 아래를 확인하세요",
                 "controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상",
                 "def _marker_snapshot", "longitudinal_takeover_ready", "restore_pending",
-                "def correct_legacy_wording", "brand", "card_healthy", "sm.seen"):
+                "def correct_legacy_wording", "brand", "card_healthy", "sm.seen",
+                "takeover_verified", "marker_problem", "takeoverVerifiedByCurrentCapture"):
     require(token in unified, f"unified 8-second diagnostics missing: {token}")
   require("cp.carName" not in unified, "CarParams has no carName member in this schema")
 
@@ -89,12 +96,14 @@ def main() -> None:
   for token in ("계기판 경고등·ADAS 경고 확인", "WARNING_SIGNALS", "onroadEvents",
                 "ACCFailInfo", "CF_VSM_Warn", "CF_Mdps_ToiFlt", "steerFaultPermanent",
                 "Panda RX 안전검사 invalid", "계기판 전구 자체를 직접 읽는 기능은 아닙니다",
+                "expected_stationary_events", "expected_reverse_alert",
+                "현재 기어·정지 상태에서 정상으로 제외한 항목",
                 "prepend_cluster_warning_report"):
     require(token in warning_web, f"cluster warning diagnostics missing: {token}")
 
   for token in ("correct_stationary_cluster_warning", "_EXPECTED_PARK_EVENTS", "wrongGear",
                 "seatbeltNotLatched", "parkBrake", "P단 정지에서 정상으로 제외한 항목",
-                "P단·정지·크루즈 비활성"):
+                "P단·정지·크루즈 비활성", "speed=-0.0km/h"):
     require(token in warning_policy, f"park warning policy missing: {token}")
 
   for token in ("AI 실차 기준·NEXO SCC 인계 확인", "NEXO_TAKEOVER_VERIFY_LOG",
