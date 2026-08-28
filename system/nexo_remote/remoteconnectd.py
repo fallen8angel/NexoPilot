@@ -10,7 +10,6 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
 
@@ -118,33 +117,17 @@ def send_ntfy(message: str, *, priority: str = "default") -> bool:
 
 
 def main() -> None:
-  params = Params()
-  session_active = False
-  session_started = 0.0
+  started_at = time.monotonic()
   success_notified = False
   failure_notified = False
   last_recovery = 0.0
   last_internet_check = 0.0
   internet = False
 
+  cloudlog.info("NEXO remote: startup connectivity monitor started")
+
   while True:
     now = time.monotonic()
-    try:
-      onroad = params.get_bool("IsOnroad")
-    except Exception:
-      onroad = False
-
-    if onroad and not session_active:
-      session_active = True
-      session_started = now
-      success_notified = False
-      failure_notified = False
-      cloudlog.info("NEXO remote: vehicle session started")
-    elif not onroad and session_active:
-      session_active = False
-      success_notified = False
-      failure_notified = False
-      cloudlog.info("NEXO remote: vehicle session ended")
 
     if now - last_internet_check >= 5.0:
       internet = internet_available()
@@ -158,7 +141,10 @@ def main() -> None:
 
     web_ready = local_port_ready(7000)
 
-    if session_active and internet and ts_ip and web_ready and not success_notified:
+    # Notify once per remoteconnectd start as soon as the comma has internet,
+    # Tailscale and the NexoPilot web server ready. This deliberately does not
+    # depend on IsOnroad so a parked/just-booted comma can announce readiness.
+    if internet and ts_ip and web_ready and not success_notified:
       message = (
         "🚗 콤마 온라인\n"
         "NexoPilot 원격접속 준비 완료\n"
@@ -167,10 +153,13 @@ def main() -> None:
       )
       if send_ntfy(message):
         success_notified = True
-        cloudlog.info(f"NEXO remote: online notification sent ({ts_ip})")
+        cloudlog.info(f"NEXO remote: startup online notification sent ({ts_ip})")
 
-    if (session_active and internet and not success_notified and not failure_notified and
-        now - session_started >= FAILURE_NOTIFY_DELAY and (not ts_ip or not web_ready)):
+    # If internet works but Tailscale or port 7000 is still not ready after a
+    # minute, send one diagnostic warning. If internet itself is down, ntfy
+    # cannot be reached, so keep waiting and send the success notice later.
+    if (internet and not success_notified and not failure_notified and
+        now - started_at >= FAILURE_NOTIFY_DELAY and (not ts_ip or not web_ready)):
       if not ts_ip and not web_ready:
         reason = "Tailscale과 7000 서버가 아직 준비되지 않았습니다."
       elif not ts_ip:
@@ -180,7 +169,7 @@ def main() -> None:
 
       if send_ntfy(f"⚠️ 콤마는 온라인이지만 원격접속 준비 실패\n{reason}", priority="high"):
         failure_notified = True
-        cloudlog.warning(f"NEXO remote: readiness warning sent, tailscale={bool(ts_ip)} web={web_ready}")
+        cloudlog.warning(f"NEXO remote: startup readiness warning sent, tailscale={bool(ts_ip)} web={web_ready}")
 
     time.sleep(POLL_INTERVAL)
 
