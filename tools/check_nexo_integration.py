@@ -169,20 +169,22 @@ def validate_hyundaican() -> None:
   require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
   require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
 
-  # Match XPlus: a fingerprint without USE_FCA must use the standard SCC12
-  # fallback and must not synthesize FCA11. The synthetic NEXO FCA_Status=0
-  # stream directly illuminates the yellow FCA-disabled cluster warning.
+  # The live NEXO fingerprint includes USE_FCA, but synthetic FCA_Status=0 is
+  # the warning source observed after the stock SCC/FCA ECU is suppressed.
   require("nexo_fca" not in values and "nexo_fca" not in source,
-          "NEXO must not force FCA11 when fingerprinting did not set USE_FCA")
+          "legacy NEXO FCA force gate must stay removed")
 
   command_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_commands) if isinstance(node, ast.If)]
-  require(any("use_fca" in condition and "CAMERA_SCC" in condition and "nexo_fca" not in condition
+  require(any("use_fca" in condition and "not is_nexo" in condition and "CAMERA_SCC" in condition
               for condition in command_conditions),
-          "FCA11 must be gated only by USE_FCA and exclude CAMERA_SCC")
-  require(any(condition == "not use_fca" for condition in command_conditions),
-          "non-FCA fingerprints must use the SCC12 AEB status fallback")
+          "FCA11 must exclude NEXO while preserving USE_FCA and CAMERA_SCC gates")
+  require(any("not use_fca" in condition and "is_nexo" in condition
+              for condition in command_conditions),
+          "NEXO must use the SCC12 fallback even when USE_FCA is fingerprinted")
   require('"CF_VSM_ConfMode"' in source and '"AEB_Status"' in source,
           "SCC12 fallback status fields missing")
+  require('"FCA_Status": 1' in source and '"FCA_Status": 0' not in source,
+          "generated FCA11 must never advertise the observed disabled status")
 
   opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
   require(any("CAMERA_SCC" in condition and "not" in condition for condition in opt_conditions),
