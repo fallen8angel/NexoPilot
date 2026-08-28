@@ -362,7 +362,11 @@ def cluster_warning_report(core, report: str) -> str:
     source == 0 and message in ("FCA11", "FCA12")
     for source, message in can_snapshot
   )
-  xplus_payload_match = fca_status == 0 and fca_usm == 1 and fca_driver_state == 2
+  openpilot_fca11_present = any(
+    128 <= source < 192 and message == "FCA11"
+    for source, message in can_snapshot
+  )
+  xplus_send_match = not openpilot_fca11_present and fca_usm == 1 and fca_driver_state == 2
 
   # Deduplicate while preserving the first and therefore most useful observation.
   critical = list(dict.fromkeys(critical))
@@ -400,11 +404,14 @@ def cluster_warning_report(core, report: str) -> str:
     *(("", "[현재 기어·정지 상태에서 정상으로 제외한 항목]", *(f"- 정보: {item}" for item in normal_context)) if normal_context else ()),
     "",
     "[XPlus 대비 FCA 송신 확인]",
-    f"XPlus 최신 기준값 일치={xplus_payload_match} (FCA_Status={fca_status}, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
+    f"XPlus 최신 송신조건 일치={xplus_send_match} (USE_FCA 미검출 NEXO는 FCA11 미송신, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
+    f"openpilot 합성 FCA11 송신={openpilot_fca11_present}",
     f"물리 source0 순정 FCA 잔존={stock_fca_present}",
     f"FCA11 프레임: {_frame_summary(snapshot, 'FCA11')}",
     f"FCA12 프레임: {_frame_summary(snapshot, 'FCA12')}",
-    "판정: XPlus와 FCA 상태값이 같아도 순정 FCA/AEB가 완전히 중지되면 노란 FCA 비활성 경고가 유지될 수 있습니다.",
+    ("판정: USE_FCA가 없는 NEXO에서 합성 FCA11이 검출됐습니다. FCA_Status=0 스트림이 노란 FCA 비활성 경고를 직접 켤 수 있습니다."
+     if openpilot_fca11_present else
+     "판정: XPlus와 동일하게 합성 FCA11을 보내지 않습니다. 업데이트 후 완전 전원 재시작으로 경고 소등 여부를 확인하세요."),
     "",
     "[경고 관련 CAN 스냅샷 - 8초 수집 직후 0.7초]",
     *_render_can(snapshot),
