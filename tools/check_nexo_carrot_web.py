@@ -148,7 +148,7 @@ required_web = (
   'parsed.path == "/update/reboot"',
   '_parked_gate(require_parking_brake=False)',
   "core.TOGGLES = list(carrot_ui.TOGGLES)",
-  'server_version = "NexoPilotWeb/7.8"',
+  'server_version = "NexoPilotWeb/7.9"',
   'Params().put("LongitudinalPersonality", personality)',
 )
 for token in required_web:
