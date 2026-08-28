@@ -12,11 +12,13 @@ def text(path: str) -> str:
 controlsd = text("selfdrive/controls/controlsd.py")
 main_ui = text("selfdrive/ui/layouts/main.py")
 hud = text("selfdrive/ui/onroad/hud_renderer.py")
+onroad_init = text("selfdrive/ui/onroad/__init__.py")
 
 for path, source in (
   ("selfdrive/controls/controlsd.py", controlsd),
   ("selfdrive/ui/layouts/main.py", main_ui),
   ("selfdrive/ui/onroad/hud_renderer.py", hud),
+  ("selfdrive/ui/onroad/__init__.py", onroad_init),
 ):
   ast.parse(source, filename=path)
 
@@ -35,6 +37,15 @@ for token in (
 ):
   if token not in controlsd:
     raise SystemExit(f"NEXO XPlus MED contract missing: {token}")
+
+for token in (
+  "gear_box_width=30",
+  "gear_box_height=36",
+  "gear=28",
+  "cruise_gap=24",
+):
+  if token not in onroad_init:
+    raise SystemExit(f"NEXO compact gear HUD contract missing: {token}")
 
 # Startup must visibly begin on Home before normal ignition/onroad routing.
 for token in (
