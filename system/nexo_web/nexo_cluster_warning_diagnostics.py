@@ -111,6 +111,7 @@ def _collect_snapshot(duration: float = 0.7) -> dict[str, object]:
   can_sock = messaging.sub_sock("can", timeout=20)
   targets = _message_addresses()
   latest: dict[tuple[int, str], dict[str, int | float]] = {}
+  frame_stats: dict[tuple[int, str], dict[str, object]] = {}
   started = time.monotonic()
 
   while time.monotonic() - started < duration:
@@ -123,9 +124,17 @@ def _collect_snapshot(duration: float = 0.7) -> dict[str, object]:
         message_name = targets.get(address)
         if message_name is None or source >= 192:
           continue
-        decoded = _decode(address, bytes(frame.dat), message_name)
+        raw = bytes(frame.dat)
+        decoded = _decode(address, raw, message_name)
         if decoded:
           latest[(source, message_name)] = decoded
+        key = (source, message_name)
+        stats = frame_stats.setdefault(key, {"count": 0, "first": raw.hex(" "), "last": "", "payloads": set()})
+        stats["count"] = int(stats["count"]) + 1
+        stats["last"] = raw.hex(" ")
+        payloads = stats["payloads"]
+        if isinstance(payloads, set) and len(payloads) < 32:
+          payloads.add(raw)
     time.sleep(0.005)
 
   result: dict[str, object] = {
@@ -135,6 +144,7 @@ def _collect_snapshot(duration: float = 0.7) -> dict[str, object]:
       "valid": bool(sm.valid[name]),
     } for name in services},
     "can": latest,
+    "frameStats": frame_stats,
   }
 
   try:
@@ -213,6 +223,23 @@ def _vehicle_signal(snapshot: dict[str, object], message: str, signal: str):
     if isinstance(values, dict) and signal in values:
       return values[signal]
   return None
+
+
+def _frame_summary(snapshot: dict[str, object], message: str) -> str:
+  stats = snapshot.get("frameStats")
+  if not isinstance(stats, dict):
+    return "수집 없음"
+  parts = []
+  for (source, name), values in sorted(stats.items(), key=lambda item: item[0][0]):
+    if name != message or not isinstance(values, dict):
+      continue
+    payloads = values.get("payloads")
+    unique = len(payloads) if isinstance(payloads, set) else 0
+    parts.append(
+      f"src={source} count={values.get('count', 0)} unique={unique} "
+      f"last={values.get('last', '')}"
+    )
+  return " | ".join(parts) or "수집 없음"
 
 
 def _render_can(snapshot: dict[str, object]) -> list[str]:
@@ -330,6 +357,13 @@ def cluster_warning_report(core, report: str) -> str:
   if isinstance(fca_driver_state, (int, float)) and fca_driver_state != 2:
     caution.append(f"FCA12 FCA_DrvSetState={fca_driver_state}: 운전자 FCA 설정 상태 불일치")
 
+  can_snapshot = snapshot.get("can") if isinstance(snapshot.get("can"), dict) else {}
+  stock_fca_present = any(
+    source == 0 and message in ("FCA11", "FCA12")
+    for source, message in can_snapshot
+  )
+  xplus_payload_match = fca_status == 0 and fca_usm == 1 and fca_driver_state == 2
+
   # Deduplicate while preserving the first and therefore most useful observation.
   critical = list(dict.fromkeys(critical))
   caution = list(dict.fromkeys(caution))
@@ -364,6 +398,13 @@ def cluster_warning_report(core, report: str) -> str:
     *(f"- 주의: {item}" for item in caution),
     *(("- CAN에서 원인 후보를 찾지 못했습니다.",) if not critical and not caution else ()),
     *(("", "[현재 기어·정지 상태에서 정상으로 제외한 항목]", *(f"- 정보: {item}" for item in normal_context)) if normal_context else ()),
+    "",
+    "[XPlus 대비 FCA 송신 확인]",
+    f"XPlus 최신 기준값 일치={xplus_payload_match} (FCA_Status={fca_status}, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
+    f"물리 source0 순정 FCA 잔존={stock_fca_present}",
+    f"FCA11 프레임: {_frame_summary(snapshot, 'FCA11')}",
+    f"FCA12 프레임: {_frame_summary(snapshot, 'FCA12')}",
+    "판정: XPlus와 FCA 상태값이 같아도 순정 FCA/AEB가 완전히 중지되면 노란 FCA 비활성 경고가 유지될 수 있습니다.",
     "",
     "[경고 관련 CAN 스냅샷 - 8초 수집 직후 0.7초]",
     *_render_can(snapshot),
