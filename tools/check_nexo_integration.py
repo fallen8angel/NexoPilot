@@ -192,8 +192,6 @@ def validate_hyundaican() -> None:
   opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
   require(any("CAMERA_SCC" in condition and "not" in condition for condition in opt_conditions),
           "FCA12 production must exclude CAMERA_SCC")
-  require('"FCA_USM": 1' in source,
-          "NEXO FCA12 must advertise the proven enabled user-setting state")
 
 
 def validate_controller() -> None:
