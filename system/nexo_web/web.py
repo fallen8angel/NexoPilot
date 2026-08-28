@@ -177,7 +177,33 @@ carrot_ui.stationary_gate = _device_stationary_gate
 
 
 class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.8"
+  server_version = "NexoPilotWeb/7.9"
+
+  def _same_origin(self) -> bool:
+    """Accept legitimate same-site form posts through a remote reverse proxy."""
+    expected_hosts = {self.headers.get("Host", "").strip().lower()}
+    forwarded_host = self.headers.get("X-Forwarded-Host", "")
+    expected_hosts.update(part.strip().lower() for part in forwarded_host.split(",") if part.strip())
+
+    forwarded = self.headers.get("Forwarded", "")
+    for part in forwarded.split(";"):
+      key, separator, value = part.strip().partition("=")
+      if separator and key.lower() == "host":
+        expected_hosts.add(value.strip().strip('"').lower())
+
+    for header in ("Origin", "Referer"):
+      value = self.headers.get(header)
+      if value and urlparse(value).netloc.lower() in expected_hosts:
+        return True
+
+    # The browser sets this before a trusted proxy rewrites Host. Cross-site
+    # requests remain blocked because browsers report them as cross-site.
+    fetch_site = self.headers.get("Sec-Fetch-Site")
+    if fetch_site in ("same-origin", "same-site"):
+      return True
+    if not self.headers.get("Origin") and not self.headers.get("Referer"):
+      return fetch_site in (None, "none")
+    return False
 
   def _settings_gate(self) -> tuple[bool, str]:
     """Allow ordinary settings in P at zero speed without requiring EPB."""
