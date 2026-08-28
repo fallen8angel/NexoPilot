@@ -54,6 +54,12 @@ def main() -> None:
   interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
   takeover = sources["opendbc_repo/opendbc/car/hyundai/nexo_takeover.py"]
 
+  require(
+    unified.index('long_enabled = cp.get("openpilotLongitudinalControl") is True') <
+    unified.index('fca_disabled = long_enabled'),
+    "unified diagnostics must initialize long_enabled before FCA classification",
+  )
+
   for token in ("NEXO_FCA_ADDRS", "NEXO_CAN_HISTORY_S = 5.0", "fault_snapshot", "recent_can",
                 "NEXO_GUARD_STATE_LOG", "_write_guard_state", '"state": "armed"',
                 '"state": "fault"', '"boot_id"'):
