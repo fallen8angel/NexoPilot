@@ -418,6 +418,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   long_enabled = cp.get("openpilotLongitudinalControl") is True
   fca_status_zero = bool(re.search(r"FCA_Status=0", report))
   fca_usm_zero = bool(re.search(r"FCA_USM=0", report))
+  fca_disabled = long_enabled and fca_status_zero
   fca_state_mismatch = long_enabled and fca_status_zero and not fca_usm_zero
   fca_heartbeat_missing = long_enabled and fca11["requested"] == 0
   takeover_verified = (
