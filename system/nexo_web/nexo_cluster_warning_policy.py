@@ -22,7 +22,8 @@ def _park_event_tokens(report: str) -> tuple[str, ...]:
 
 def _is_stationary_park(report: str) -> bool:
   return ("gear=park" in report or "기어: park" in report) and (
-    "speed=0.0km/h" in report or '"vEgoKph": 0.0' in report
+    "speed=0.0km/h" in report or "speed=-0.0km/h" in report or
+    '"vEgoKph": 0.0' in report or '"vEgoKph": -0.0' in report
   )
 
 
