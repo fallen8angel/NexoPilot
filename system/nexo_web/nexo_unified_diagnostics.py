@@ -31,6 +31,14 @@ REAL_ERROR = re.compile(
   r"(?:^|[^a-z])error(?:[^a-z]|$))",
   re.IGNORECASE,
 )
+FALSE_ERROR_STATUS = re.compile(
+  r"[\"']?[A-Za-z_]*(?:error|fault|unavailable|invalid)[A-Za-z_]*[\"']?\s*[:=]\s*(?:false|none|0)\b",
+  re.IGNORECASE,
+)
+FALSE_RADAR_TUPLE = re.compile(
+  r"radarErrors\s*=\s*\(\s*False\s*,\s*False\s*,\s*False\s*,\s*False\s*\)",
+  re.IGNORECASE,
+)
 
 
 def _text_param(core, key: str) -> str:
@@ -301,11 +309,19 @@ def _first_real_error(parts: Iterable[str], ignore_comm_issue: bool = False) -> 
   for part in parts:
     for raw_line in part.splitlines():
       line = re.sub(r"\s+", " ", raw_line).strip()
-      if not line or not REAL_ERROR.search(line):
+      if not line:
         continue
-      lowered = line.lower().replace(" ", "")
-      if '"error":false' in lowered or "error=false" in lowered:
+
+      # Normal status lines such as `radarUnavailable=False`,
+      # `"error": false`, and radarErrors=(False, False, False, False)
+      # must not be promoted to the first error just because their key contains
+      # words such as error/fault/unavailable.
+      candidate = FALSE_RADAR_TUPLE.sub("", line)
+      candidate = FALSE_ERROR_STATUS.sub("", candidate)
+      if not REAL_ERROR.search(candidate):
         continue
+
+      lowered = candidate.lower().replace(" ", "")
       if ignore_comm_issue and "commissue" in lowered:
         continue
       return line[:220]
@@ -367,8 +383,11 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   live_comm_ok, live_comm_bad = _live_comm_status(services)
 
   restore_log = _read_tail(NEXO_SCC_RESTORE_LOG)
-  restore_ack = "acknowledged=True" in restore_log
   restore_last_line = next((line.strip() for line in reversed(restore_log.splitlines()) if line.strip()), "기록 없음")
+  restore_ack = "acknowledged=True" in restore_last_line
+  restore_physical_active = "physical source0 stock SCC already active" in restore_last_line
+  restore_verified = restore_ack or restore_physical_active
+  restore_state = "acknowledged" if restore_ack else ("already_active" if restore_physical_active else "not_verified")
 
   radar_info = services.get("radarState", {})
   radar_error = any(bool(radar_info.get(key)) for key in ("canError", "radarFault", "wrongConfig", "unavailableTemporary"))
@@ -509,9 +528,11 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     "※ 같은 주소가 여러 src에 보여도 버스·방향·차단 상태가 달라 실제 동시 제어를 뜻하지 않습니다.",
     "※ 통신 주파수는 당근/selfdrived처럼 충분한 수신 간격이 쌓인 뒤 판정합니다.",
     "※ 과거 commIssue 로그는 현재 핵심 서비스가 모두 정상일 때 첫 오류에서 제외합니다.",
+    "※ 정상 상태값에 error/fault/unavailable이라는 키 이름만 포함된 경우 첫 오류로 올리지 않습니다.",
     "",
     f"[핵심 프로세스] {process_text}",
     f"[takeover 마커] stage={marker.get('stage')} raw={marker.get('raw') or '없음'}",
+    f"[순정 SCC 복구 판정] verified={restore_verified} state={restore_state}",
     f"[순정 SCC 복구 마지막 기록] {restore_last_line[:240]}",
     f"[메시지별 흐름] {flow_text}",
   ]
@@ -555,6 +576,9 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     "takeoverMarkerPending": marker_problem,
     "takeoverVerifiedByCurrentCapture": takeover_verified,
     "restoreAcknowledgedInLog": restore_ack,
+    "restoreVerifiedByPhysicalScc": restore_physical_active,
+    "restoreVerified": restore_verified,
+    "restoreState": restore_state,
     "restoreLastLine": restore_last_line,
     "currentFailureReason": _text_param(core, "NexoCardSessionReason") or _text_param(core, "NexoLongitudinalFailure"),
     "currentCardStage": _text_param(core, "NexoCardStage"),
