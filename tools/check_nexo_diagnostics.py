@@ -56,9 +56,11 @@ def main() -> None:
 
   require(
     unified.index('long_enabled = cp.get("openpilotLongitudinalControl") is True') <
-    unified.index('fca_disabled = long_enabled'),
+    unified.index('fca_state_mismatch = long_enabled'),
     "unified diagnostics must initialize long_enabled before FCA classification",
   )
+  for token in ("fca_heartbeat_missing", "FCA11 상태 스트림 단절", "FCA 상태 조합 불일치"):
+    require(token in unified, f"unified FCA heartbeat diagnostic missing: {token}")
 
   for token in ("NEXO_FCA_ADDRS", "NEXO_CAN_HISTORY_S = 5.0", "fault_snapshot", "recent_can",
                 "NEXO_GUARD_STATE_LOG", "_write_guard_state", '"state": "armed"',
