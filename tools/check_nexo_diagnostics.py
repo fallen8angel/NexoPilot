@@ -88,7 +88,7 @@ def main() -> None:
     require(token in unified, f"unified 8-second diagnostics missing: {token}")
   require("cp.carName" not in unified, "CarParams has no carName member in this schema")
 
-  for token in ("NEXO runtime guard·검사 단계 확인", "P단 정지 검사", "주행 활성 검사: 미실시",
+  for token in ("NEXO runtime guard·검사 단계 확인", "P단 정지 검사", "주행 활성 검사:", "\"미실시\"",
                 "현재 부팅 기록", "source0 SCC", "runtime guard가 무장되지 않았습니다",
                 "prepend_runtime_guard_report"):
     require(token in guard_web, f"runtime guard web diagnostics missing: {token}")
