@@ -398,7 +398,6 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   experimental_live = services.get("selfdriveState", {}).get("experimentalMode")
   cc_info = services.get("carControl", {})
   experimental_match = experimental_param is not None and experimental_live is experimental_param
-  fca_disabled = long_enabled and bool(re.search(r"FCA_Status=0", report))
 
   init_section = _section(report, "롱컨 초기화·UDS 추적")
   runtime_section = _section(report, "card 런타임 상태")
@@ -416,6 +415,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   radar_init_ok = "radar-track request completed=True" in init_section or ("RADAR ATTEMPT" in init_section and "completed" in init_section)
   scc12 = flow["SCC12"]
   long_enabled = cp.get("openpilotLongitudinalControl") is True
+  fca_disabled = long_enabled and bool(re.search(r"FCA_Status=0", report))
   takeover_verified = (
     long_enabled and stock_scc == 0 and
     "physical src0 silence verified" in init_section and
