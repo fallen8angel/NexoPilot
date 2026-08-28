@@ -151,11 +151,12 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   }
 
-  # Match XPlus and the standard Hyundai path: only fingerprints that actually
-  # advertise USE_FCA produce FCA11. NEXO without USE_FCA carries the fallback
-  # AEB status in SCC12; synthesizing FCA11 with FCA_Status=0 lights the cluster
-  # FCA-disabled warning even while longitudinal control is otherwise healthy.
-  if not use_fca:
+  # NEXO longitudinal takeover must not synthesize FCA11. Its live fingerprint
+  # includes USE_FCA, but the stock FCA source disappears with SCC suppression;
+  # replacing it with FCA_Status=0 directly lights the yellow FCA-disabled icon.
+  # Keep the standard SCC12 fallback fields for NEXO while preserving USE_FCA
+  # behavior on every other Hyundai platform.
+  if not use_fca or is_nexo:
     scc12_values["CF_VSM_ConfMode"] = 1
     scc12_values["AEB_Status"] = 1
 
@@ -181,15 +182,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     scc14 = (scc14[0], bytes(scc14_dat), scc14[2])
   commands.append(scc14)
 
-  # Send FCA11 only when fingerprinting detected a real FCA11 source, matching
-  # XPlus. The tested NEXO fingerprint has no USE_FCA flag and must not receive a
-  # synthetic FCA_Status=0 stream.
-  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Preserve normal FCA11 production on supported non-NEXO platforms. NEXO is
+  # intentionally excluded: reporting FCA_Status=1 would falsely claim stock AEB
+  # is active, while reporting 0 is the warning condition observed in the car.
+  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 0 if is_nexo else 1,
+      "FCA_Status": 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
