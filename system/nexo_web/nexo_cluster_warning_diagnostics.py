@@ -348,10 +348,12 @@ def cluster_warning_report(core, report: str) -> str:
     caution.append(f"SCC12 TakeOverReq={takeover_req}")
   if isinstance(fca_warn, (int, float)) and fca_warn != 0:
     caution.append(f"FCA11 CF_VSM_Warn={fca_warn}")
-  if isinstance(fca_status, (int, float)) and fca_status == 0:
+  if isinstance(fca_status, (int, float)) and fca_status == 0 and fca_usm not in (None, 0):
     caution.append(
-      "FCA11 FCA_Status=0: 순정 전방충돌방지/AEB 비활성 상태가 계기판의 노란 FCA 경고를 켤 수 있음"
+      f"FCA 상태 조합 불일치: FCA_Status=0인데 FCA_USM={fca_usm} (NEXOdriveAI 기준은 0/0)"
     )
+  if fca_status is None and isinstance(fca_usm, (int, float)):
+    caution.append("FCA11 상태 스트림 없음: FCA12만 송신되어 계기판 통신 단절 경고가 켜질 수 있음")
   if isinstance(fca_usm, (int, float)) and fca_usm not in (0, 1):
     caution.append(f"FCA12 FCA_USM={fca_usm}: 알려진 NEXO/AI 기준값(0 또는 1) 밖의 상태")
   if isinstance(fca_driver_state, (int, float)) and fca_driver_state != 2:
@@ -366,7 +368,7 @@ def cluster_warning_report(core, report: str) -> str:
     128 <= source < 192 and message == "FCA11"
     for source, message in can_snapshot
   )
-  nexo_warning_fix_match = not openpilot_fca11_present and fca_usm == 1 and fca_driver_state == 2
+  nexo_ai_state_match = openpilot_fca11_present and fca_status == 0 and fca_usm == 0 and fca_driver_state == 2
 
   # Deduplicate while preserving the first and therefore most useful observation.
   critical = list(dict.fromkeys(critical))
@@ -404,14 +406,14 @@ def cluster_warning_report(core, report: str) -> str:
     *(("", "[현재 기어·정지 상태에서 정상으로 제외한 항목]", *(f"- 정보: {item}" for item in normal_context)) if normal_context else ()),
     "",
     "[NEXO 롱컨 FCA 경고 수정 확인]",
-    f"수정 송신조건 일치={nexo_warning_fix_match} (NEXO는 USE_FCA 여부와 무관하게 합성 FCA11 미송신, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
-    f"openpilot 합성 FCA11 송신={openpilot_fca11_present}",
+    f"NEXOdriveAI 상태조합 일치={nexo_ai_state_match} (FCA_Status={fca_status}, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
+    f"openpilot FCA11 상태 스트림 송신={openpilot_fca11_present}",
     f"물리 source0 순정 FCA 잔존={stock_fca_present}",
     f"FCA11 프레임: {_frame_summary(snapshot, 'FCA11')}",
     f"FCA12 프레임: {_frame_summary(snapshot, 'FCA12')}",
-    ("판정: USE_FCA가 없는 NEXO에서 합성 FCA11이 검출됐습니다. FCA_Status=0 스트림이 노란 FCA 비활성 경고를 직접 켤 수 있습니다."
-     if openpilot_fca11_present else
-     "판정: NEXO 경고 수정대로 합성 FCA11을 보내지 않습니다. 업데이트 후 완전 전원 재시작으로 경고 소등 여부를 확인하세요."),
+    ("판정: NEXOdriveAI의 실차 상태 조합과 일치합니다. 완전 전원 재시작 후 계기판 경고 소등을 확인하세요."
+     if nexo_ai_state_match else
+     "판정: FCA11 단절 또는 FCA11/FCA12 상태 불일치입니다. 위 프레임과 상태값을 확인하세요."),
     "",
     "[경고 관련 CAN 스냅샷 - 8초 수집 직후 0.7초]",
     *_render_can(snapshot),
