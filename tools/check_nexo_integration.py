@@ -169,22 +169,25 @@ def validate_hyundaican() -> None:
   require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
   require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
 
-  # The live NEXO fingerprint includes USE_FCA, but synthetic FCA_Status=0 is
-  # the warning source observed after the stock SCC/FCA ECU is suppressed.
+  # NEXOdriveAI keeps an FCA heartbeat and uses the internally consistent
+  # disabled-state pair FCA_Status=0/FCA_USM=0. This avoids both the mixed-state
+  # warning and the missing-message warning without claiming stock AEB is active.
   require("nexo_fca" not in values and "nexo_fca" not in source,
-          "legacy NEXO FCA force gate must stay removed")
+          "legacy NEXO FCA force variable must stay removed")
 
   command_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_commands) if isinstance(node, ast.If)]
-  require(any("use_fca" in condition and "not is_nexo" in condition and "CAMERA_SCC" in condition
+  require(any("use_fca or is_nexo" in condition and "CAMERA_SCC" in condition
               for condition in command_conditions),
-          "FCA11 must exclude NEXO while preserving USE_FCA and CAMERA_SCC gates")
-  require(any("not use_fca" in condition and "is_nexo" in condition
+          "NEXO FCA heartbeat condition missing")
+  require(any("not use_fca" in condition and "not is_nexo" in condition
               for condition in command_conditions),
-          "NEXO must use the SCC12 fallback even when USE_FCA is fingerprinted")
+          "SCC12 non-FCA fallback must exclude NEXO")
   require('"CF_VSM_ConfMode"' in source and '"AEB_Status"' in source,
           "SCC12 fallback status fields missing")
-  require('"FCA_Status": 1' in source and '"FCA_Status": 0' not in source,
-          "generated FCA11 must never advertise the observed disabled status")
+  require('"FCA_Status": 0 if is_nexo else 1' in source,
+          "NEXO FCA heartbeat must use the NEXOdriveAI status")
+  require('"FCA_USM": 0 if is_nexo else 1' in source,
+          "NEXO FCA12 must match the NEXOdriveAI user-setting state")
 
   opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
   require(any("CAMERA_SCC" in condition and "not" in condition for condition in opt_conditions),
