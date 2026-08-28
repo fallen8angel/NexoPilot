@@ -305,7 +305,10 @@ def cluster_warning_report(core, report: str) -> str:
 
   acc_fail = _vehicle_signal(snapshot, "SCC12", "ACCFailInfo")
   takeover_req = _vehicle_signal(snapshot, "SCC12", "TakeOverReq")
+  fca_status = _vehicle_signal(snapshot, "FCA11", "FCA_Status")
   fca_warn = _vehicle_signal(snapshot, "FCA11", "CF_VSM_Warn")
+  fca_usm = _vehicle_signal(snapshot, "FCA12", "FCA_USM")
+  fca_driver_state = _vehicle_signal(snapshot, "FCA12", "FCA_DrvSetState")
   mdps_fault = _vehicle_signal(snapshot, "MDPS12", "CF_Mdps_ToiFlt")
   mdps_unavailable = _vehicle_signal(snapshot, "MDPS12", "CF_Mdps_ToiUnavail")
   if isinstance(acc_fail, (int, float)) and acc_fail != 0:
@@ -318,6 +321,14 @@ def cluster_warning_report(core, report: str) -> str:
     caution.append(f"SCC12 TakeOverReq={takeover_req}")
   if isinstance(fca_warn, (int, float)) and fca_warn != 0:
     caution.append(f"FCA11 CF_VSM_Warn={fca_warn}")
+  if isinstance(fca_status, (int, float)) and fca_status == 0:
+    caution.append(
+      "FCA11 FCA_Status=0: 순정 전방충돌방지/AEB 비활성 상태가 계기판의 노란 FCA 경고를 켤 수 있음"
+    )
+  if isinstance(fca_usm, (int, float)) and fca_usm not in (0, 1):
+    caution.append(f"FCA12 FCA_USM={fca_usm}: 알려진 NEXO/AI 기준값(0 또는 1) 밖의 상태")
+  if isinstance(fca_driver_state, (int, float)) and fca_driver_state != 2:
+    caution.append(f"FCA12 FCA_DrvSetState={fca_driver_state}: 운전자 FCA 설정 상태 불일치")
 
   # Deduplicate while preserving the first and therefore most useful observation.
   critical = list(dict.fromkeys(critical))
@@ -358,6 +369,7 @@ def cluster_warning_report(core, report: str) -> str:
     *_render_can(snapshot),
     "",
     "※ 계기판 전구 자체를 직접 읽는 기능은 아닙니다. CAN·차량상태·openpilot 경고에서 원인 후보를 찾습니다.",
+    "※ FCA_Status=0은 단순 고장 비트가 아니라 순정 AEB 비활성 표시입니다. 실제 AEB가 중지된 상태에서 계기판만 정상으로 속이는 송신은 안전상 적용하지 않습니다.",
     "※ NEXO 롱컨에서는 TCS13 ACCEnable 값이 순정 SCC 중지 때문에 비정상처럼 보일 수 있어 단독 고장 판정에 사용하지 않습니다.",
     "※ 계기판에 SCC·FCA·ADAS·조향 경고등이 실제로 켜져 있으면 위 판정과 무관하게 도로 주행하지 마세요.",
   ]
