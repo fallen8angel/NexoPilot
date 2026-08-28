@@ -414,8 +414,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   uds_suppress_ok = "acknowledged=True" in init_section or "completed=True" in init_section
   radar_init_ok = "radar-track request completed=True" in init_section or ("RADAR ATTEMPT" in init_section and "completed" in init_section)
   scc12 = flow["SCC12"]
+  fca11 = flow["FCA11"]
   long_enabled = cp.get("openpilotLongitudinalControl") is True
-  fca_disabled = long_enabled and bool(re.search(r"FCA_Status=0", report))
+  fca_status_zero = bool(re.search(r"FCA_Status=0", report))
+  fca_usm_zero = bool(re.search(r"FCA_USM=0", report))
+  fca_state_mismatch = long_enabled and fca_status_zero and not fca_usm_zero
+  fca_heartbeat_missing = long_enabled and fca11["requested"] == 0
   takeover_verified = (
     long_enabled and stock_scc == 0 and
     "physical src0 silence verified" in init_section and
@@ -447,8 +451,13 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     warnings.append("현재 핵심 서비스 통신 이상: " + "; ".join(live_comm_bad))
   if experimental_param is not None and not experimental_match:
     warnings.append(f"실험 모드 설정과 실제 상태 불일치: param={experimental_param}, live={experimental_live}")
-  if fca_disabled:
-    fca_reason = "FCA_Status=0: 순정 전방충돌방지/AEB 비활성 상태"
+  if fca_state_mismatch:
+    fca_reason = "FCA 상태 조합 불일치: FCA_Status=0 / FCA_USM!=0"
+    warnings.append(fca_reason)
+    if first_error == "없음":
+      first_error = fca_reason
+  if fca_heartbeat_missing:
+    fca_reason = "FCA11 상태 스트림 단절: 계기판 통신 경고 가능"
     warnings.append(fca_reason)
     if first_error == "없음":
       first_error = fca_reason
