@@ -151,6 +151,7 @@ def _collect_snapshot(duration: float = 0.7) -> dict[str, object]:
       "seatbeltUnlatched": _safe_bool(cs, "seatbeltUnlatched"),
       "canErrorCounter": _safe_int(cs, "canErrorCounter"),
       "gear": str(cs.gearShifter),
+      "vEgo": float(cs.vEgo),
       "cruiseAvailable": bool(cs.cruiseState.available),
       "cruiseEnabled": bool(cs.cruiseState.enabled),
     }
@@ -237,6 +238,17 @@ def cluster_warning_report(core, report: str) -> str:
 
   critical: list[str] = []
   caution: list[str] = []
+  normal_context: list[str] = []
+
+  gear = str(car_state.get("gear", "")).rsplit(".", 1)[-1].lower()
+  try:
+    stationary = abs(float(car_state.get("vEgo", 0.0))) < 0.05
+  except (TypeError, ValueError):
+    stationary = False
+  expected_stationary_events = {
+    "wrongGear", "seatbeltNotLatched", "parkBrake", "wrongCarMode",
+    "pcmDisable", "preEnableStandstill", "locationdTemporaryError",
+  }
 
   if car_state.get("accFaulted") is True:
     critical.append("carState.accFaulted=True")
@@ -270,7 +282,10 @@ def cluster_warning_report(core, report: str) -> str:
     name = str(event.get("name", "unknown"))
     flags = event.get("flags") if isinstance(event.get("flags"), list) else []
     event_lines.append(f"{name}({','.join(str(flag) for flag in flags) or 'active'})")
-    if any(flag in CRITICAL_EVENT_FLAGS for flag in flags):
+    expected_context = stationary and gear in ("park", "reverse") and name in expected_stationary_events
+    if expected_context:
+      normal_context.append(f"onroadEvent {name}: {','.join(str(flag) for flag in flags)}")
+    elif any(flag in CRITICAL_EVENT_FLAGS for flag in flags):
       critical.append(f"onroadEvent {name}: {','.join(str(flag) for flag in flags)}")
     elif flags:
       caution.append(f"onroadEvent {name}: {','.join(str(flag) for flag in flags)}")
@@ -279,7 +294,13 @@ def cluster_warning_report(core, report: str) -> str:
     str(selfdrive.get("alertText1", "")).strip(),
     str(selfdrive.get("alertText2", "")).strip(),
   ) if text)
-  if alert_text:
+  alert_type = str(selfdrive.get("alertType", ""))
+  expected_reverse_alert = gear == "reverse" and (
+    alert_type.startswith("reverseGear") or alert_text.strip().lower() == "reverse"
+  )
+  if alert_text and expected_reverse_alert:
+    normal_context.append("화면 경고: Reverse (후진 중 정상 안내)")
+  elif alert_text:
     caution.append("화면 경고: " + alert_text)
 
   acc_fail = _vehicle_signal(snapshot, "SCC12", "ACCFailInfo")
@@ -331,6 +352,7 @@ def cluster_warning_report(core, report: str) -> str:
     *(f"- 치명: {item}" for item in critical),
     *(f"- 주의: {item}" for item in caution),
     *(("- CAN에서 원인 후보를 찾지 못했습니다.",) if not critical and not caution else ()),
+    *(("", "[현재 기어·정지 상태에서 정상으로 제외한 항목]", *(f"- 정보: {item}" for item in normal_context)) if normal_context else ()),
     "",
     "[경고 관련 CAN 스냅샷 - 8초 수집 직후 0.7초]",
     *_render_can(snapshot),
