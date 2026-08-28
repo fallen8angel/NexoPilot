@@ -9,6 +9,7 @@ from pathlib import Path
 
 from opendbc.car import make_tester_present_msg
 from opendbc.car.disable_ecu import disable_ecu
+from opendbc.car.isotp_parallel_query import IsoTpParallelQuery
 from opendbc.car.nexo_session_owner import claim_owner
 
 
@@ -123,6 +124,25 @@ def _observe_source0_scc(can_recv, duration_s: float,
   }
 
 
+def _send_communication_control_direct(can_recv, can_send, *, bus: int, addr: int,
+                                       communication_control: bytes) -> tuple[bool, str]:
+  """Send 0x28 in the ECU's current diagnostic session without forcing 0x10 03 first.
+
+  A hot NEXO restart can leave the MANDO radar already streaming tracks while the
+  ECU no longer acknowledges another extended-session request. In that state the
+  normal disable_ecu() path can stop before it ever sends CommunicationControl.
+  This fallback only sends the requested 0x28 frame; takeover is still accepted
+  exclusively by the physical source-0 SCC silence verification below.
+  """
+  try:
+    query = IsoTpParallelQuery(can_send, can_recv, bus, [(addr, None)],
+                               [communication_control], [b""])
+    query.get_data(0)
+    return True, ""
+  except Exception as error:
+    return False, f"{type(error).__name__}: {error}"
+
+
 def _suppress_once(can_recv, can_send, *, bus: int, addr: int, communication_control: bytes,
                    sample_s: float, settle_s: float, min_source0_frames: int,
                    keepalive: Callable[[], None], label: str, owner: str) -> dict[str, object]:
@@ -139,6 +159,16 @@ def _suppress_once(can_recv, can_send, *, bus: int, addr: int, communication_con
   except Exception as error:
     acknowledged = False
     detail = f"{type(error).__name__}: {error}"
+
+  direct_attempted = not acknowledged
+  direct_sent = False
+  if direct_attempted:
+    direct_sent, direct_detail = _send_communication_control_direct(
+      can_recv, can_send, bus=bus, addr=addr, communication_control=communication_control,
+    )
+    if direct_detail:
+      detail = f"{detail}; " if detail else ""
+      detail += f"direct CommunicationControl {direct_detail}"
 
   try:
     can_recv(wait_for_one=False)
@@ -160,12 +190,16 @@ def _suppress_once(can_recv, can_send, *, bus: int, addr: int, communication_con
   # therefore be physically silent even when disable_ecu() cannot report an
   # acknowledgement. Treat the live source-0 bus observation as authoritative:
   # the bus itself must be alive and every stock SCC/FCA stream must be absent.
+  # The direct fallback above does not relax this condition; it only makes sure
+  # 0x28 is actually attempted when a hot diagnostic session rejects 0x10 03.
   # The longer stability window and runtime guard below still fail closed if
   # factory SCC returns after takeover.
   success = enough_bus_data and int(observation["source0_scc_total"]) == 0
   return {
     "label": label,
     "acknowledged": acknowledged,
+    "directCommunicationControlAttempted": direct_attempted,
+    "directCommunicationControlSent": direct_sent,
     "elapsed_ms": round((time.monotonic() - started) * 1000.0, 1),
     "detail": detail,
     "enough_bus_data": enough_bus_data,
@@ -236,6 +270,7 @@ def ensure_nexo_stock_scc_silent(can_recv, can_send, *, bus: int, addr: int,
       attempt_records.append(record)
       trace(
         f"STEP 3 {label} attempt={retry}/{attempts} acknowledged={record['acknowledged']} "
+        f"direct28={record['directCommunicationControlSent']} "
         f"source0_frames={record['source0_frames']} source0_scc={record['source0_scc_total']} "
         f"counts={record['source0_scc_counts']} success={record['success']}"
       )
