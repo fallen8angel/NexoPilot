@@ -468,8 +468,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     overall = _label("주행 금지", problems[0])
     action = "P단에서만 유지하고 상세 원문의 첫 오류와 복구 상태를 확인하세요."
   elif warnings:
-    overall = _label("주의", "치명 오류는 없지만 일부 보조 진단값을 확인하지 못했습니다.")
-    action = "이 파일 하나만 공유하면 됩니다. 실제 주행 전 계기판 경고가 없어야 합니다."
+    if fca_disabled:
+      overall = _label("주의", "순정 전방충돌방지/AEB 비활성 상태가 확인됐습니다.")
+      action = "경고등 제거만을 위해 정상 상태를 위조하지 마세요. 롱컨 OFF 후 순정 SCC/AEB 복구와 경고 소등을 확인하세요."
+    else:
+      overall = _label("주의", "치명 오류는 없지만 일부 보조 진단값을 확인하지 못했습니다.")
+      action = "이 파일 하나만 공유하면 됩니다. 실제 주행 전 계기판 경고가 없어야 합니다."
   else:
     overall = _label("정상 후보", "8초 P단 진단에서 치명 오류를 찾지 못했습니다.")
     action = "정적·P단 진단 결과이며 실제 도로 안전을 보증하지 않습니다."
