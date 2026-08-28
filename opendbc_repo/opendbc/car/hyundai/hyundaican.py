@@ -209,12 +209,13 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # NEXOdriveAI also publishes FCA12 at 5 Hz. FCA_USM=0 matches that known-good
-  # NEXO behavior; other Hyundai platforms keep the existing setting.
+  # Publish the FCA user-setting state expected by the legacy NEXO cluster.
+  # FCA_USM=0 is interpreted as an unavailable/disabled state and illuminates
+  # the yellow FCA master warning after the stock FCA source is suppressed.
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 0 if is_nexo else 1,
+      "FCA_USM": 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
