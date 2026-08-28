@@ -396,6 +396,12 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   radar_init_ok = "radar-track request completed=True" in init_section or ("RADAR ATTEMPT" in init_section and "completed" in init_section)
   scc12 = flow["SCC12"]
   long_enabled = cp.get("openpilotLongitudinalControl") is True
+  takeover_verified = (
+    long_enabled and stock_scc == 0 and
+    "physical src0 silence verified" in init_section and
+    ("runtime SCC guard armed" in init_section or "longitudinal_takeover_ready" in report)
+  )
+  marker_problem = bool(marker.get("problem")) and not takeover_verified
 
   problems: list[str] = []
   warnings: list[str] = []
@@ -405,7 +411,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     problems.append("card 프로세스와 carState/heartbeat가 모두 비정상")
   if not carstate_alive:
     problems.append("carState가 수신되지 않거나 유효하지 않음")
-  if bool(marker.get("problem")):
+  if marker_problem:
     problems.append(str(marker.get("description")))
   if current_crash:
     problems.append("현재 버전 card crash 기록 존재")
@@ -448,7 +454,11 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   carstate_status = _label("정상" if carstate_alive else "실패", f"seen={services.get('carState', {}).get('seen')}, valid={services.get('carState', {}).get('valid')}, age={services.get('carState', {}).get('ageMs')}ms")
   radar_status = _label("정상" if radar_tracks > 0 and not radar_error else "주의", f"tracks={radar_tracks}, errors={{{', '.join(f'{k}={radar_info.get(k)}' for k in ('canError', 'radarFault', 'wrongConfig', 'unavailableTemporary'))}}}")
   panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
-  restore_status = _label("실패" if marker.get("problem") else "정상", str(marker.get("description")))
+  restore_description = (
+    "현재 8초 CAN에서 source0 SCC=0이고 takeover 완료·runtime guard 무장이 재확인됨"
+    if takeover_verified and bool(marker.get("problem")) else str(marker.get("description"))
+  )
+  restore_status = _label("실패" if marker_problem else "정상", restore_description)
   comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk (2초 warm-up 완료)" if live_comm_ok else "; ".join(live_comm_bad))
   experimental_level = "정상" if experimental_param is True and experimental_live is True else ("정보" if experimental_param is False and experimental_live is False else "주의")
   experimental_status = _label(
@@ -542,7 +552,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     },
     "takeoverMarkerExists": marker.get("exists"),
     "takeoverMarkerStage": marker.get("stage"),
-    "takeoverMarkerPending": marker.get("problem"),
+    "takeoverMarkerPending": marker_problem,
+    "takeoverVerifiedByCurrentCapture": takeover_verified,
     "restoreAcknowledgedInLog": restore_ack,
     "restoreLastLine": restore_last_line,
     "currentFailureReason": _text_param(core, "NexoCardSessionReason") or _text_param(core, "NexoLongitudinalFailure"),
