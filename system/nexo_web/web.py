@@ -22,6 +22,7 @@ Delegated validation contract retained for the NEXO integration checker:
 """
 
 import html
+import json
 import socket
 import threading
 import time
@@ -57,6 +58,8 @@ _original_live_page = core.live_page
 _original_handler = core.Handler
 _last_diagnostic_lock = threading.Lock()
 _last_diagnostic: tuple[str, str] | None = None
+_diagnostic_capture_state = "idle"
+_diagnostic_capture_error = ""
 remote_ui.install(carrot_ui)
 
 
@@ -80,6 +83,49 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   ai_report = ai_parity_diagnostics.prepend_ai_parity_report(core, stationary_corrected_report)
   final_report = panda_fault_diagnostics.prepend_panda_fault_report(ai_report)
   return final_report.replace("\x00", "")
+
+
+def _capture_diagnostic_in_background() -> None:
+  global _last_diagnostic, _diagnostic_capture_state, _diagnostic_capture_error
+  try:
+    capture = longitudinal_blackbox_output()
+    filename = f"nexo-long-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+    with _last_diagnostic_lock:
+      _last_diagnostic = (capture, filename)
+      _diagnostic_capture_state = "ready"
+      _diagnostic_capture_error = ""
+  except Exception as error:
+    with _last_diagnostic_lock:
+      _diagnostic_capture_state = "error"
+      _diagnostic_capture_error = str(error)[:240]
+
+
+def diagnostic_wait_page() -> str:
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단 수집 중</title><style>{carrot_ui._css(core)}</style></head><body><main>
+  <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>8초 진단 수집 중</h1><div class="mini" id="capture-status">기기에서 진단을 수집하고 있습니다. 이 연결은 오래 유지하지 않습니다.</div></div>
+  <div class="card"><div class="title">잠시만 기다려 주세요</div><div class="desc">완료되면 저장된 파일을 짧은 요청으로 자동 다운로드합니다. 자동으로 받지 못하면 아래 버튼을 누르세요.</div>
+  <form id="download-form" method="post" action="/diagnostics/download-last"><button class="secondary">완료된 파일 받기</button></form></div>
+  {carrot_ui._nav("diagnostics")}</main>
+  <script>
+  let submitted=false;
+  async function pollCapture(){{
+    try {{
+      const response=await fetch("/api/diagnostics-status", {{cache:"no-store"}});
+      const data=await response.json();
+      document.getElementById("capture-status").textContent=data.message;
+      if(data.state==="ready" && !submitted){{
+        submitted=true;
+        document.getElementById("download-form").submit();
+        return;
+      }}
+      if(data.state==="error") return;
+    }} catch(error) {{
+      document.getElementById("capture-status").textContent="원격 연결을 다시 확인하고 완료된 파일 받기를 눌러 주세요.";
+    }}
+    setTimeout(pollCapture, 700);
+  }}
+  pollCapture();
+  </script></body></html>'''
 
 
 def diagnostic_page(message: str = "") -> str:
@@ -254,6 +300,18 @@ class CarrotStyleHandler(_original_handler):
     if parsed.path == "/api/update-status":
       self._send_json(core.update_status_json())
       return
+    if parsed.path == "/api/diagnostics-status":
+      with _last_diagnostic_lock:
+        state = _diagnostic_capture_state
+        error = _diagnostic_capture_error
+      messages = {
+        "idle": "진단 대기 중",
+        "running": "8초 통합진단을 기기에서 수집하고 있습니다.",
+        "ready": "진단 완료 · 파일 다운로드를 시작합니다.",
+        "error": f"진단 실패: {error or '원인 확인 불가'}",
+      }
+      self._send_json(json.dumps({"state": state, "message": messages.get(state, state)}, ensure_ascii=False).encode("utf-8"))
+      return
     if parsed.path == "/api/hud":
       self._send_json(hud_ui.hud_status_json(core))
       return
@@ -285,13 +343,14 @@ class CarrotStyleHandler(_original_handler):
         self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
         return
 
-      global _last_diagnostic
+      global _last_diagnostic, _diagnostic_capture_state, _diagnostic_capture_error
       if parsed.path == "/diagnostics/capture":
-        capture = longitudinal_blackbox_output()
-        filename = f"nexo-long-{time.strftime('%Y%m%d-%H%M%S')}.txt"
         with _last_diagnostic_lock:
-          _last_diagnostic = (capture, filename)
-        self._send_download(capture, filename)
+          if _diagnostic_capture_state != "running":
+            _diagnostic_capture_state = "running"
+            _diagnostic_capture_error = ""
+            threading.Thread(target=_capture_diagnostic_in_background, daemon=True, name="nexo-diagnostic-capture").start()
+        self._send(diagnostic_wait_page())
         return
 
       with _last_diagnostic_lock:
