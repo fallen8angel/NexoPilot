@@ -151,12 +151,10 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   }
 
-  # NEXO longitudinal takeover must not synthesize FCA11. Its live fingerprint
-  # includes USE_FCA, but the stock FCA source disappears with SCC suppression;
-  # replacing it with FCA_Status=0 directly lights the yellow FCA-disabled icon.
-  # Keep the standard SCC12 fallback fields for NEXO while preserving USE_FCA
-  # behavior on every other Hyundai platform.
-  if not use_fca or is_nexo:
+  # NEXOdriveAI's warning-free longitudinal path keeps an FCA status heartbeat
+  # and pairs FCA_Status=0 with FCA_USM=0. Do not add the non-FCA SCC12 fallback
+  # on NEXO; the mixed FCA_Status=0/FCA_USM=1 state produced the original warning.
+  if not use_fca and not is_nexo:
     scc12_values["CF_VSM_ConfMode"] = 1
     scc12_values["AEB_Status"] = 1
 
@@ -182,15 +180,15 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     scc14 = (scc14[0], bytes(scc14_dat), scc14[2])
   commands.append(scc14)
 
-  # Preserve normal FCA11 production on supported non-NEXO platforms. NEXO is
-  # intentionally excluded: reporting FCA_Status=1 would falsely claim stock AEB
-  # is active, while reporting 0 is the warning condition observed in the car.
-  if use_fca and not is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Preserve the FCA heartbeat on NEXO so the cluster does not report message
+  # loss. NEXO uses the proven NEXOdriveAI disabled-state pair (Status=0, USM=0);
+  # other USE_FCA cars retain the standard active status.
+  if (use_fca or is_nexo) and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
       "FCA_DrvSetStatus": 1,
-      "FCA_Status": 1,
+      "FCA_Status": 0 if is_nexo else 1,
     }
     fca11_dat = packer.make_can_msg("FCA11", 0, fca11_values)[1]
     fca11_values["CR_FCA_ChkSum"] = hyundai_checksum(fca11_dat[:7])
@@ -216,7 +214,7 @@ def create_acc_opt(packer, CP):
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 1,
+      "FCA_USM": 0 if is_nexo else 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
