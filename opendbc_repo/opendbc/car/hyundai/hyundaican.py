@@ -151,11 +151,11 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   }
 
-  # NEXOdriveAI's proven NEXO path supplies FCA11/FCA12 itself after the stock
-  # SCC/FCA source is suppressed. Treat NEXO as an FCA-producing path even when
-  # fingerprinting did not set USE_FCA before the ECU was muted.
-  nexo_fca = is_nexo and not (CP.flags & HyundaiFlags.CAMERA_SCC)
-  if not use_fca and not nexo_fca:
+  # Match XPlus and the standard Hyundai path: only fingerprints that actually
+  # advertise USE_FCA produce FCA11. NEXO without USE_FCA carries the fallback
+  # AEB status in SCC12; synthesizing FCA11 with FCA_Status=0 lights the cluster
+  # FCA-disabled warning even while longitudinal control is otherwise healthy.
+  if not use_fca:
     scc12_values["CF_VSM_ConfMode"] = 1
     scc12_values["AEB_Status"] = 1
 
@@ -181,10 +181,10 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     scc14 = (scc14[0], bytes(scc14_dat), scc14[2])
   commands.append(scc14)
 
-  # Working NEXOdriveAI sends FCA11 continuously with the generated SCC command
-  # set. Without it, the NEXO cluster can illuminate the FCA/master warning even
-  # though radar tracks and SCC takeover are otherwise healthy.
-  if (use_fca or nexo_fca) and not (CP.flags & HyundaiFlags.CAMERA_SCC):
+  # Send FCA11 only when fingerprinting detected a real FCA11 source, matching
+  # XPlus. The tested NEXO fingerprint has no USE_FCA flag and must not receive a
+  # synthetic FCA_Status=0 stream.
+  if use_fca and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
       "PAINT1_Status": 1,
