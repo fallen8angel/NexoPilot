@@ -13,12 +13,14 @@ controlsd = text("selfdrive/controls/controlsd.py")
 main_ui = text("selfdrive/ui/layouts/main.py")
 hud = text("selfdrive/ui/onroad/hud_renderer.py")
 onroad_init = text("selfdrive/ui/onroad/__init__.py")
+exp_button = text("selfdrive/ui/onroad/exp_button.py")
 
 for path, source in (
   ("selfdrive/controls/controlsd.py", controlsd),
   ("selfdrive/ui/layouts/main.py", main_ui),
   ("selfdrive/ui/onroad/hud_renderer.py", hud),
   ("selfdrive/ui/onroad/__init__.py", onroad_init),
+  ("selfdrive/ui/onroad/exp_button.py", exp_button),
 ):
   ast.parse(source, filename=path)
 
@@ -46,6 +48,22 @@ for token in (
 ):
   if token not in onroad_init:
     raise SystemExit(f"NEXO compact gear HUD contract missing: {token}")
+
+for token in (
+  'self._draw_current_speed(rect)',
+):
+  if token not in hud:
+    raise SystemExit(f"NEXO persistent speed HUD contract missing: {token}")
+
+for token in (
+  "car_state.steeringAngleDeg",
+  "selfdrive_state.enabled or selfdrive_state.active or car_state.cruiseState.enabled",
+  "self._active_green if self._cruise_active else self._white_color",
+  "rl.draw_texture_pro",
+  "-self._steering_angle_deg",
+):
+  if token not in exp_button:
+    raise SystemExit(f"NEXO rotating cruise wheel contract missing: {token}")
 
 # Startup must visibly begin on Home before normal ignition/onroad routing.
 for token in (
