@@ -215,27 +215,37 @@ def validate_controller() -> None:
 def validate_controlsd() -> None:
   source = read("selfdrive/controls/controlsd.py")
   compact = " ".join(source.split())
+  manager = read("opendbc_repo/opendbc/car/hyundai/nexo_med.py")
+  manager_compact = " ".join(manager.split())
 
   required = (
-    "self.nexo_med_lateral = False",
-    "self.nexo_med_speed = False",
     "self.nexo_med_rearm_required = False",
-    "if self.nexo_med_lateral and self.nexo_med_rearm_required",
-    "speed_pressed and driving_gear and not disable_events and not self.nexo_med_rearm_required",
+    "med_selected = self.nexo_med and CS.cruiseState.available",
+    "med_speed_control = med_selected and CS.cruiseState.enabled",
     "self.nexo_med_rearm_required = True",
-    "not self.nexo_med_rearm_required and driving_gear and not disable_events",
-    "hudControl.lanesVisible = self.nexo_med_lateral if self.nexo_med else CC.enabled",
+    "med_selected and selfdrive_enabled and not self.nexo_med_rearm_required",
+    "longitudinal_requested = med_actuation_allowed and med_speed_control",
+    "hudControl.lanesVisible = med_selected if self.nexo_med else CC.enabled",
   )
   for token in required:
     require(token in compact, f"NEXO MED re-arm contract missing: {token}")
 
-  non_gear_start = source.index("if non_gear_disable:")
-  non_gear_end = source.index("# A remembered MED selection", non_gear_start)
+  non_gear_start = source.index("if non_gear_disable and med_selected:")
+  non_gear_end = source.index("# NEXO actuation requires", non_gear_start)
   non_gear_block = source[non_gear_start:non_gear_end]
-  require("self.nexo_med_lateral = False" not in non_gear_block,
-          "real disable must preserve the MED main selection while latching actuation off")
-  require("self.nexo_med_speed = False" in non_gear_block and "self.nexo_med_rearm_required = True" in non_gear_block,
-          "real disable must drop speed control and set the re-arm latch")
+  require("self.nexo_med_rearm_required = True" in non_gear_block,
+          "real disable must set the MED re-arm latch")
+
+  manager_required = (
+    "self.available = False",
+    "self.enabled = False",
+    "self.enable_pulse = driving_gear",
+    "self.suppress_cancel_until_release = True",
+    "if not driving_gear: self.enabled = False",
+    "car_state.cruiseState.enabled = bool(self.available and self.enabled)",
+  )
+  for token in manager_required:
+    require(token in manager_compact, f"NEXO button-owned MED state missing: {token}")
 
 
 def validate_recovery() -> None:

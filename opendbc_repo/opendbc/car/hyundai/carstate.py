@@ -8,6 +8,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
+from opendbc.car.hyundai.nexo_med import NexoMedStateManager
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -97,6 +98,14 @@ class CarState(CarStateBase):
     self.vnavi_speed = 0
     self.vnavi_publish_counter = 0
 
+    # With stock SCC intentionally silent, NEXO cruise state must be owned by
+    # the physical MODE/SET/RES/CANCEL buttons rather than TCS13.ACC_REQ.
+    self.nexo_med = None
+    if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN and CP.openpilotLongitudinalControl:
+      self.nexo_med = NexoMedStateManager(
+        ButtonType, BUTTONS_DICT, create_button_events, CV.KPH_TO_MS, CV.MPH_TO_KPH,
+      )
+
   def _update_vnavi(self, cp, ret) -> None:
     self.vnavi_total_distance += max(0.0, ret.vEgo) * 0.01
     timestamp = max(cp.ts_nanos.get("Navi_HU", {}).values(), default=0)
@@ -184,11 +193,11 @@ class CarState(CarStateBase):
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
-        # ACCEnable becomes disabled after the stock SCC ECU is intentionally
-        # silenced. It is therefore not a valid availability/fault signal for
-        # NEXO openpilot longitudinal. Buttons and controls state own engagement.
-        ret.cruiseState.available = True
-        ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
+        # The NEXO MED manager applies the authoritative state after CLU11 is
+        # decoded below. Do not feed the outgoing SCC request back into its own
+        # activation gate through TCS13.ACC_REQ.
+        ret.cruiseState.available = False
+        ret.cruiseState.enabled = False
       else:
         ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
         ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
@@ -278,13 +287,24 @@ class CarState(CarStateBase):
     if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
       self.lda_button = cp.vl["BCM_PO_11"]["LDA_BTN"]
 
-    # Expose the physical MAIN/MODE button to controlsd so NEXO MED can toggle
-    # steering-only operation independently from SET/RES speed control.
     main_button_events = create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise})
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
                         *main_button_events,
                         *create_button_events(self.lda_button, prev_lda_button, {1: ButtonType.lkas})]
+
+    if self.nexo_med is not None:
+      driving_gear = ret.gearShifter in (structs.CarState.GearShifter.drive, structs.CarState.GearShifter.low)
+      ret.buttonEvents = self.nexo_med.update(
+        ret,
+        self.main_buttons[-1],
+        self.cruise_buttons[-1],
+        self.is_metric,
+        ret.buttonEvents,
+        driving_gear,
+      )
+      self.nexo_med.apply_to_car_state(ret)
+
     ret.blockPcmEnable = not self.recent_button_interaction()
 
     if ret.vEgo < (self.CP.minSteerSpeed + 2.) and self.CP.minSteerSpeed > 10.:
@@ -296,6 +316,13 @@ class CarState(CarStateBase):
     if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
       self._update_vnavi(cp, ret)
     return ret
+
+  def update_button_enable(self, button_events):
+    if self.nexo_med is not None:
+      # MODE enters and enables the lateral MED session. SET/RES only changes
+      # the manager's independent speed-control state.
+      return self.nexo_med.consume_enable_pulse()
+    return super().update_button_enable(button_events)
 
   def update_canfd(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]

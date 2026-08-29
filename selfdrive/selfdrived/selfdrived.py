@@ -407,7 +407,13 @@ class SelfdriveD:
 
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
-      cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      if self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN" and self.CP.openpilotLongitudinalControl:
+        # NEXO SPEED_CONTROL is software-owned while stock SCC is silent. It is
+        # not a PCM mismatch, and controlsd still requires self.enabled before
+        # any longitudinal command can be active.
+        cruise_mismatch = False
+      else:
+        cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)

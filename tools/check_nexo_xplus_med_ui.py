@@ -10,6 +10,7 @@ def text(path: str) -> str:
 
 
 controlsd = text("selfdrive/controls/controlsd.py")
+nexo_med = text("opendbc_repo/opendbc/car/hyundai/nexo_med.py")
 main_ui = text("selfdrive/ui/layouts/main.py")
 hud = text("selfdrive/ui/onroad/hud_renderer.py")
 onroad_init = text("selfdrive/ui/onroad/__init__.py")
@@ -17,6 +18,7 @@ exp_button = text("selfdrive/ui/onroad/exp_button.py")
 
 for path, source in (
   ("selfdrive/controls/controlsd.py", controlsd),
+  ("opendbc_repo/opendbc/car/hyundai/nexo_med.py", nexo_med),
   ("selfdrive/ui/layouts/main.py", main_ui),
   ("selfdrive/ui/onroad/hud_renderer.py", hud),
   ("selfdrive/ui/onroad/__init__.py", onroad_init),
@@ -24,21 +26,31 @@ for path, source in (
 ):
   ast.parse(source, filename=path)
 
-# NEXO MED must start disarmed, remember an explicit MAIN/lateral selection
-# through P/N/R, drop speed control outside D/L, require a MODE re-arm after a
-# real disable, and never bypass disable/gear actuation gates.
+# NEXO MED state is owned once from raw CLU11 buttons. It must start OFF, enter
+# MED on MODE, add speed control on SET/RES, retain MED across brake/P/N/R, and
+# implement two-stage CANCEL without leaking the first cancel to selfdrived.
 for token in (
-  "self.nexo_med_lateral = False",
-  "self.nexo_med_rearm_required = False",
+  "self.available = False",
+  "self.enabled = False",
+  "main_pressed = self.main_armed and raw_main != 0 and self.prev_raw_main == 0",
+  "self.enable_pulse = driving_gear",
   "if not driving_gear:",
-  "self.nexo_med_speed = False",
+  "self.enabled = False",
+  "self.suppress_cancel_until_release = True",
+  "car_state.cruiseState.enabled = bool(self.available and self.enabled)",
+):
+  if token not in nexo_med:
+    raise SystemExit(f"NEXO XPlus MED contract missing: {token}")
+
+for token in (
+  "med_selected = self.nexo_med and CS.cruiseState.available",
+  "med_speed_control = med_selected and CS.cruiseState.enabled",
   '_onroad_event_name(e) != "wrongGear"',
-  "not self.nexo_med_rearm_required and",
-  "longitudinal_requested = longitudinal_requested and self.nexo_med_speed and driving_gear and not disable_events",
-  "Two-stage CANCEL: SPEED -> MED, then MED -> OFF.",
+  "med_selected and selfdrive_enabled and not self.nexo_med_rearm_required",
+  "longitudinal_requested = med_actuation_allowed and med_speed_control",
 ):
   if token not in controlsd:
-    raise SystemExit(f"NEXO XPlus MED contract missing: {token}")
+    raise SystemExit(f"NEXO MED actuation gate missing: {token}")
 
 for token in (
   "gear_box_width=30",

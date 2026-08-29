@@ -19,7 +19,7 @@ from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
-from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_UNSET
 from openpilot.selfdrive.car.nexo_diagnostics import record_nexo_fault_snapshot
 from openpilot.selfdrive.car.nexo_guard import NexoStockSccRuntimeGuard
 from openpilot.selfdrive.car.nexo_runtime_diagnostics import (
@@ -344,6 +344,17 @@ class Car:
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
     CS.vCruiseCluster = float(self.v_cruise_helper.v_cruise_cluster_kph)
+
+    if self.CP.carFingerprint == "HYUNDAI_NEXO_1ST_GEN" and self.CP.openpilotLongitudinalControl:
+      # NEXO MED owns the retained set speed in CarState. Keep MODE/MED_WAIT
+      # visibly unset, then publish the exact manager target as soon as SET/RES
+      # enters SPEED_CONTROL. This avoids the generic helper changing the first
+      # SET press by one unit or losing the retained RES target after braking.
+      target_kph = float(CS.cruiseState.speed) * 3.6 if CS.cruiseState.enabled else float(V_CRUISE_UNSET)
+      self.v_cruise_helper.v_cruise_kph = target_kph
+      self.v_cruise_helper.v_cruise_cluster_kph = target_kph
+      CS.vCruise = target_kph
+      CS.vCruiseCluster = target_kph
 
     return CS, RD
 

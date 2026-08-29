@@ -157,8 +157,8 @@ class CarController(CarControllerBase):
 
     if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
       # NEXO MED keeps lateral control alive while speed control is independently
-      # enabled/disabled. Require both the controller request and the vehicle-side
-      # cruise-enabled state before advertising active SCC. Whichever side drops
+      # enabled/disabled. Require both the controller request and the button-owned
+      # cruise state before advertising active SCC. Whichever side drops
       # first during SPEED_CONTROL -> MED immediately produces an inactive SCC12,
       # avoiding a short active-command tail while preserving Panda safety checks.
       if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
