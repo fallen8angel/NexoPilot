@@ -169,9 +169,9 @@ def validate_hyundaican() -> None:
   require("copy.copy(stock_scc12)" not in source, "stock SCC12 template copy must stay removed")
   require("copy.copy(stock_scc14)" not in source, "stock SCC14 template copy must stay removed")
 
-  # NEXOdriveAI keeps an FCA heartbeat and uses the internally consistent
-  # disabled-state pair FCA_Status=0/FCA_USM=0. This avoids both the mixed-state
-  # warning and the missing-message warning without claiming stock AEB is active.
+  # XPlus keeps the NEXO FCA heartbeat at FCA_Status=0/FCA_USM=1. The status
+  # stream prevents a missing-message warning while all FCA actuation fields
+  # stay zero and remain independently blocked by Panda safety.
   require("nexo_fca" not in values and "nexo_fca" not in source,
           "legacy NEXO FCA force variable must stay removed")
 
@@ -185,9 +185,9 @@ def validate_hyundaican() -> None:
   require('"CF_VSM_ConfMode"' in source and '"AEB_Status"' in source,
           "SCC12 fallback status fields missing")
   require('"FCA_Status": 0 if is_nexo else 1' in source,
-          "NEXO FCA heartbeat must use the NEXOdriveAI status")
-  require('"FCA_USM": 0 if is_nexo else 1' in source,
-          "NEXO FCA12 must match the NEXOdriveAI user-setting state")
+          "NEXO FCA heartbeat must use the XPlus status")
+  require('"FCA_USM": 1' in source,
+          "NEXO FCA12 must match the XPlus user-setting state")
 
   opt_conditions = [ast.unparse(node.test) for node in ast.walk(create_acc_opt) if isinstance(node, ast.If)]
   require(any("CAMERA_SCC" in condition and "not" in condition for condition in opt_conditions),

@@ -348,9 +348,9 @@ def cluster_warning_report(core, report: str) -> str:
     caution.append(f"SCC12 TakeOverReq={takeover_req}")
   if isinstance(fca_warn, (int, float)) and fca_warn != 0:
     caution.append(f"FCA11 CF_VSM_Warn={fca_warn}")
-  if isinstance(fca_status, (int, float)) and fca_status == 0 and fca_usm not in (None, 0):
+  if isinstance(fca_status, (int, float)) and fca_status == 0 and fca_usm not in (None, 1):
     caution.append(
-      f"FCA 상태 조합 불일치: FCA_Status=0인데 FCA_USM={fca_usm} (NEXOdriveAI 기준은 0/0)"
+      f"FCA 상태 조합 불일치: FCA_Status=0인데 FCA_USM={fca_usm} (현행 XPlus 기준은 0/1)"
     )
   if fca_status is None and isinstance(fca_usm, (int, float)):
     caution.append("FCA11 상태 스트림 없음: FCA12만 송신되어 계기판 통신 단절 경고가 켜질 수 있음")
@@ -368,7 +368,7 @@ def cluster_warning_report(core, report: str) -> str:
     128 <= source < 192 and message == "FCA11"
     for source, message in can_snapshot
   )
-  nexo_ai_state_match = openpilot_fca11_present and fca_status == 0 and fca_usm == 0 and fca_driver_state == 2
+  xplus_state_match = openpilot_fca11_present and fca_status == 0 and fca_usm == 1 and fca_driver_state == 2
 
   # Deduplicate while preserving the first and therefore most useful observation.
   critical = list(dict.fromkeys(critical))
@@ -405,21 +405,21 @@ def cluster_warning_report(core, report: str) -> str:
     *(("- CAN에서 원인 후보를 찾지 못했습니다.",) if not critical and not caution else ()),
     *(("", "[현재 기어·정지 상태에서 정상으로 제외한 항목]", *(f"- 정보: {item}" for item in normal_context)) if normal_context else ()),
     "",
-    "[NEXO 롱컨 FCA 경고 수정 확인]",
-    f"NEXOdriveAI 상태조합 일치={nexo_ai_state_match} (FCA_Status={fca_status}, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
+    "[XPlus식 NEXO 롱컨 FCA 상태 확인]",
+    f"현행 XPlus 상태조합 일치={xplus_state_match} (FCA_Status={fca_status}, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
     f"openpilot FCA11 상태 스트림 송신={openpilot_fca11_present}",
     f"물리 source0 순정 FCA 잔존={stock_fca_present}",
     f"FCA11 프레임: {_frame_summary(snapshot, 'FCA11')}",
     f"FCA12 프레임: {_frame_summary(snapshot, 'FCA12')}",
-    ("판정: NEXOdriveAI의 실차 상태 조합과 일치합니다. 완전 전원 재시작 후 계기판 경고 소등을 확인하세요."
-     if nexo_ai_state_match else
+    ("판정: 현행 XPlus의 NEXO 상태 조합과 일치합니다. 완전 전원 재시작 후 계기판 경고 소등을 확인하세요."
+     if xplus_state_match else
      "판정: FCA11 단절 또는 FCA11/FCA12 상태 불일치입니다. 위 프레임과 상태값을 확인하세요."),
     "",
     "[경고 관련 CAN 스냅샷 - 8초 수집 직후 0.7초]",
     *_render_can(snapshot),
     "",
     "※ 계기판 전구 자체를 직접 읽는 기능은 아닙니다. CAN·차량상태·openpilot 경고에서 원인 후보를 찾습니다.",
-    "※ FCA_Status=0은 단순 고장 비트가 아니라 순정 AEB 비활성 표시입니다. 실제 AEB가 중지된 상태에서 계기판만 정상으로 속이는 송신은 안전상 적용하지 않습니다.",
+    "※ XPlus 상태값을 맞췄어도 순정 AEB 작동을 의미하지 않습니다. FCA 제동 명령 비트는 0으로 유지되고 Panda가 비정상 작동 명령을 차단합니다.",
     "※ NEXO 롱컨에서는 TCS13 ACCEnable 값이 순정 SCC 중지 때문에 비정상처럼 보일 수 있어 단독 고장 판정에 사용하지 않습니다.",
     "※ 계기판에 SCC·FCA·ADAS·조향 경고등이 실제로 켜져 있으면 위 판정과 무관하게 도로 주행하지 마세요.",
   ]

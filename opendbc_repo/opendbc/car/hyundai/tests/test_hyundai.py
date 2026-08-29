@@ -96,6 +96,7 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
   def setUp(self):
     self.CP = SimpleNamespace(carFingerprint=CAR.HYUNDAI_NEXO_1ST_GEN, flags=0)
     self.hud = SimpleNamespace(
+      lanesVisible=True,
       leadDistanceBars=3,
       leadVisible=True,
       leadDistance=42.5,
@@ -143,7 +144,7 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
     assert scc11["ACC_ObjRelSpd"] == 0
     assert packer.last("SCC14")["ObjGap"] == 0
 
-  def test_nexo_preserves_unowned_stock_scc_fields(self):
+  def test_nexo_ignores_stock_templates_and_clears_fault_fields(self):
     packer = self.create_commands(
       enabled=True,
       stock_scc11={"SCCInfoDisplay": 4},
@@ -151,15 +152,20 @@ class TestNexoLongitudinalCommands(unittest.TestCase):
       stock_scc14={"ComfortBandUpper": 0.5},
     )
     assert packer.last("SCC11")["SCCInfoDisplay"] == 0
-    assert packer.last("SCC12")["CF_VSM_Warn"] == 0
+    assert packer.last("SCC12").get("CF_VSM_Warn", 0) == 0
     assert packer.last("SCC14")["ComfortBandUpper"] == 0.0
     assert packer.last("SCC12")["ACCMode"] == 1
     assert packer.last("SCC12")["ACCFailInfo"] == 0
     assert packer.last("SCC12")["TakeOverReq"] == 0
 
-  def test_nexo_fca_status_matches_proven_ai_sequence(self):
+  def test_nexo_fca_status_matches_xplus_sequence(self):
     packer = self.create_commands(enabled=True, use_fca=True)
     assert packer.last("FCA11")["FCA_Status"] == 0
+
+    option_packer = self.RecordingPacker()
+    hyundaican.create_acc_opt(option_packer, self.CP)
+    assert option_packer.last("FCA12")["FCA_USM"] == 1
+    assert option_packer.last("FCA12")["FCA_DrvSetState"] == 2
 
 
 class TestHyundaiFingerprint(unittest.TestCase):

@@ -430,9 +430,9 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   fca11 = flow["FCA11"]
   long_enabled = cp.get("openpilotLongitudinalControl") is True
   fca_status_zero = bool(re.search(r"FCA_Status=0", report))
-  fca_usm_zero = bool(re.search(r"FCA_USM=0", report))
+  fca_usm_one = bool(re.search(r"FCA_USM=1", report))
   fca_disabled = long_enabled and fca_status_zero
-  fca_state_mismatch = long_enabled and fca_status_zero and not fca_usm_zero
+  fca_state_mismatch = long_enabled and fca_status_zero and not fca_usm_one
   fca_heartbeat_missing = long_enabled and fca11["requested"] == 0
   takeover_verified = (
     long_enabled and stock_scc == 0 and
@@ -469,7 +469,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   if not diagnostic_transport_unavailable and experimental_param is not None and not experimental_match:
     warnings.append(f"실험 모드 설정과 실제 상태 불일치: param={experimental_param}, live={experimental_live}")
   if not diagnostic_transport_unavailable and fca_state_mismatch:
-    fca_reason = "FCA 상태 조합 불일치: FCA_Status=0 / FCA_USM!=0"
+    fca_reason = "FCA 상태 조합 불일치: FCA_Status=0 / FCA_USM!=1 (현행 XPlus 기준)"
     warnings.append(fca_reason)
     if first_error == "없음":
       first_error = fca_reason

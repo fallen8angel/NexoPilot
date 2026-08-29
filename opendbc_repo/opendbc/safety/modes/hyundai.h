@@ -389,7 +389,9 @@ static bool hyundai_fwd_hook(int bus_num, int addr) {
            (safety_get_ts_elapsed(now, hyundai_nexo_scc12_last_tx) < HYUNDAI_NEXO_SCC_OWNERSHIP_TIMEOUT_US);
   }
 
-  // NEXO does not synthesize FCA11/FCA12. Factory FCA must remain available.
+  // FCA is deliberately outside SCC ownership: factory camera-side FCA remains
+  // forwarded, while the NEXO radar-suppressed path may send status-only FCA on
+  // bus 0. The TX hook above continues to reject every FCA actuation command.
   return false;
 }
 

@@ -20,6 +20,7 @@ class TestNexoXPlusLongitudinalCapture(unittest.TestCase):
   def setUp(self):
     self.CP = SimpleNamespace(carFingerprint=CAR.HYUNDAI_NEXO_1ST_GEN, flags=0)
     self.hud = SimpleNamespace(
+      lanesVisible=True,
       leadDistanceBars=3,
       leadVisible=True,
       leadDistance=42.5,
@@ -64,6 +65,15 @@ class TestNexoXPlusLongitudinalCapture(unittest.TestCase):
     packer = self.create_commands(enabled=True, accel=0.4, long_override=True)
     self.assertEqual(packer.last("SCC12")["ACCMode"], 2)
     self.assertEqual(packer.last("SCC14")["ACCMode"], 2)
+
+  def test_fca_status_heartbeat_matches_current_xplus(self):
+    command_packer = self.create_commands(enabled=True, use_fca=True)
+    self.assertEqual(command_packer.last("FCA11")["FCA_Status"], 0)
+
+    option_packer = self.RecordingPacker()
+    hyundaican.create_acc_opt(option_packer, self.CP)
+    self.assertEqual(option_packer.last("FCA12")["FCA_USM"], 1)
+    self.assertEqual(option_packer.last("FCA12")["FCA_DrvSetState"], 2)
 
 
 if __name__ == "__main__":

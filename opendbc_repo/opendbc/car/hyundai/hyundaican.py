@@ -151,9 +151,9 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
     "CR_VSM_Alive": idx % 0xF,
   }
 
-  # NEXOdriveAI's warning-free longitudinal path keeps an FCA status heartbeat
-  # and pairs FCA_Status=0 with FCA_USM=0. Do not add the non-FCA SCC12 fallback
-  # on NEXO; the mixed FCA_Status=0/FCA_USM=1 state produced the original warning.
+  # XPlus' current NEXO path keeps an FCA status heartbeat and pairs
+  # FCA_Status=0 with FCA_USM=1. Do not add the non-FCA SCC12 fallback on NEXO;
+  # AEB_Status=1 is itself the generic Hyundai "AEB disabled" cluster indicator.
   if not use_fca and not is_nexo:
     scc12_values["CF_VSM_ConfMode"] = 1
     scc12_values["AEB_Status"] = 1
@@ -181,8 +181,8 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
   commands.append(scc14)
 
   # Preserve the FCA heartbeat on NEXO so the cluster does not report message
-  # loss. NEXO uses the proven NEXOdriveAI disabled-state pair (Status=0, USM=0);
-  # other USE_FCA cars retain the standard active status.
+  # loss. Match XPlus' NEXO status value while leaving every FCA actuation field
+  # at zero; Panda independently rejects any FCA11 actuation command.
   if (use_fca or is_nexo) and not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca11_values = {
       "CR_FCA_Alive": idx % 0xF,
@@ -199,7 +199,6 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
 def create_acc_opt(packer, CP):
   commands = []
-  is_nexo = CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN
 
   scc13_values = {
     "SCCDrvModeRValue": 2,
@@ -208,13 +207,12 @@ def create_acc_opt(packer, CP):
   }
   commands.append(packer.make_can_msg("SCC13", 0, scc13_values))
 
-  # Publish the FCA user-setting state expected by the legacy NEXO cluster.
-  # FCA_USM=0 is interpreted as an unavailable/disabled state and illuminates
-  # the yellow FCA master warning after the stock FCA source is suppressed.
+  # XPlus keeps FCA_USM=1 in its NEXO FCA12 heartbeat. This is a driver-setting
+  # state only; FCA11 actuation remains zero and is enforced by Panda safety.
   if not (CP.flags & HyundaiFlags.CAMERA_SCC):
     fca12_values = {
       "FCA_DrvSetState": 2,
-      "FCA_USM": 0 if is_nexo else 1,
+      "FCA_USM": 1,
     }
     commands.append(packer.make_can_msg("FCA12", 0, fca12_values))
 
