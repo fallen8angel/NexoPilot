@@ -157,10 +157,14 @@ class CarController(CarControllerBase):
 
     if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
       # NEXO MED keeps lateral control alive while speed control is independently
-      # enabled/disabled. Only advertise active longitudinal SCC when longActive
-      # is true. This also avoids racing one last active SCC12 against Panda when
-      # controlsAllowed drops during a speed-control -> MED transition.
-      longitudinal_enabled = CC.longActive if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else CC.enabled
+      # enabled/disabled. Require both the controller request and the vehicle-side
+      # cruise-enabled state before advertising active SCC. Whichever side drops
+      # first during SPEED_CONTROL -> MED immediately produces an inactive SCC12,
+      # avoiding a short active-command tail while preserving Panda safety checks.
+      if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+        longitudinal_enabled = CC.longActive and CS.out.cruiseState.enabled
+      else:
+        longitudinal_enabled = CC.enabled
 
       # TODO: unclear if this is needed
       jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
@@ -205,7 +209,7 @@ class CarController(CarControllerBase):
 
     # blinkers
     if lka_steering and self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
-      can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
+      can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CP, self.CAN, CC.leftBlinker, CC.rightBlinker))
 
     if self.CP.openpilotLongitudinalControl:
       if lka_steering:
