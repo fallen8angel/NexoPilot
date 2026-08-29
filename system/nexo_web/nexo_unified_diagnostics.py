@@ -344,6 +344,15 @@ def _live_comm_status(services: dict[str, dict[str, object]]) -> tuple[bool, lis
   return not bad, bad
 
 
+def _transport_sample_total(services: dict[str, dict[str, object]]) -> int:
+  """Count actual cereal samples without treating default Cap'n Proto values as live data."""
+  return sum(
+    int(info.get("sampleCount") or 0)
+    for name, info in services.items()
+    if name != "snapshotError"
+  )
+
+
 def _label(level: str, detail: str) -> str:
   return f"[{level}] {detail}"
 
@@ -381,6 +390,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= 3.0
   card_healthy = card_running and (heartbeat_fresh or carstate_alive)
   live_comm_ok, live_comm_bad = _live_comm_status(services)
+  transport_sample_total = _transport_sample_total(services)
+  diagnostic_transport_unavailable = transport_sample_total == 0
 
   restore_log = _read_tail(NEXO_SCC_RESTORE_LOG)
   restore_last_line = next((line.strip() for line in reversed(restore_log.splitlines()) if line.strip()), "기록 없음")
@@ -408,7 +419,9 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     (runtime_section, init_section, current_crash and crash_section or "", error_section),
     ignore_comm_issue=live_comm_ok,
   )
-  if not live_comm_ok:
+  if diagnostic_transport_unavailable:
+    first_error = "진단 통신 불가: openpilot 실시간 메시지 전체 수신 0건"
+  elif not live_comm_ok:
     first_error = "현재 commIssue: " + "; ".join(live_comm_bad)[:190]
 
   uds_suppress_ok = "acknowledged=True" in init_section or "completed=True" in init_section
@@ -430,34 +443,37 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
 
   problems: list[str] = []
   warnings: list[str] = []
-  if not cp.get("available") or not cp.get("isNexo"):
-    problems.append("차량이 HYUNDAI_NEXO_1ST_GEN으로 확인되지 않음")
-  if not card_healthy:
-    problems.append("card 프로세스와 carState/heartbeat가 모두 비정상")
-  if not carstate_alive:
-    problems.append("carState가 수신되지 않거나 유효하지 않음")
-  if marker_problem:
-    problems.append(str(marker.get("description")))
-  if current_crash:
-    problems.append("현재 버전 card crash 기록 존재")
-  if radar_error:
-    problems.append("radarState 오류 존재")
-  if acc_fault:
-    problems.append("ACC fault 관측")
-  if rx_invalid:
-    problems.append("Panda RX 안전검사 invalid")
-  if active and controls_allowed and blocked_scc:
-    problems.append("실제 제어 활성 중 SCC Panda 차단 관측")
-  if not live_comm_ok:
+  if diagnostic_transport_unavailable:
+    warnings.append("openpilot 실시간 메시지 전체 수신 0건: CAN·Panda·차량 고장으로 판정하지 않음")
+  else:
+    if not cp.get("available") or not cp.get("isNexo"):
+      problems.append("차량이 HYUNDAI_NEXO_1ST_GEN으로 확인되지 않음")
+    if not card_healthy:
+      problems.append("card 프로세스와 carState/heartbeat가 모두 비정상")
+    if not carstate_alive:
+      problems.append("carState가 수신되지 않거나 유효하지 않음")
+    if marker_problem:
+      problems.append(str(marker.get("description")))
+    if current_crash:
+      problems.append("현재 버전 card crash 기록 존재")
+    if radar_error:
+      problems.append("radarState 오류 존재")
+    if acc_fault:
+      problems.append("ACC fault 관측")
+    if rx_invalid:
+      problems.append("Panda RX 안전검사 invalid")
+    if active and controls_allowed and blocked_scc:
+      problems.append("실제 제어 활성 중 SCC Panda 차단 관측")
+  if not diagnostic_transport_unavailable and not live_comm_ok:
     warnings.append("현재 핵심 서비스 통신 이상: " + "; ".join(live_comm_bad))
-  if experimental_param is not None and not experimental_match:
+  if not diagnostic_transport_unavailable and experimental_param is not None and not experimental_match:
     warnings.append(f"실험 모드 설정과 실제 상태 불일치: param={experimental_param}, live={experimental_live}")
-  if fca_state_mismatch:
+  if not diagnostic_transport_unavailable and fca_state_mismatch:
     fca_reason = "FCA 상태 조합 불일치: FCA_Status=0 / FCA_USM!=0"
     warnings.append(fca_reason)
     if first_error == "없음":
       first_error = fca_reason
-  if fca_heartbeat_missing:
+  if not diagnostic_transport_unavailable and fca_heartbeat_missing:
     fca_reason = "FCA11 상태 스트림 단절: 계기판 통신 경고 가능"
     warnings.append(fca_reason)
     if first_error == "없음":
@@ -467,14 +483,17 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
   # and a fresh, valid carState already prove the card loop is healthy.
   # Likewise, inactive stock/Panda SCC address traces are kept in the detailed
   # flow output below but must not downgrade the overall result to [주의].
-  if not active and blocked_scc:
+  if not diagnostic_transport_unavailable and not active and blocked_scc:
     warnings.append("P단·크루즈 비활성 상태의 Panda 차단은 정상일 수 있음")
-  if long_enabled and not active and scc12["requested"] == 0:
+  if not diagnostic_transport_unavailable and long_enabled and not active and scc12["requested"] == 0:
     warnings.append("P단·크루즈 비활성 진단이라 SCC12 요청 0회는 정상일 수 있음")
-  if long_enabled and radar_tracks == 0:
+  if not diagnostic_transport_unavailable and long_enabled and radar_tracks == 0:
     warnings.append("레이더 트랙을 관측하지 못함")
 
-  if problems:
+  if diagnostic_transport_unavailable:
+    overall = _label("진단 불가", "openpilot 실시간 메시지 전체 수신 0건")
+    action = "진단 페이지를 새로 연 뒤 제어 스택 준비 완료를 기다려 다시 수집하세요. 이 결과만으로 CAN·Panda 고장이나 주행 가능 여부를 판단하지 마세요."
+  elif problems:
     overall = _label("주행 금지", problems[0])
     action = "P단에서만 유지하고 상세 원문의 첫 오류와 복구 상태를 확인하세요."
   elif warnings:
@@ -489,17 +508,21 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     action = "정적·P단 진단 결과이며 실제 도로 안전을 보증하지 않습니다."
 
   vehicle_status = _label("정상" if cp.get("isNexo") else "실패", f"{cp.get('fingerprint')} / brand={cp.get('brand')}")
-  card_status = _label("정상" if card_healthy else "실패", f"process={card_running}, heartbeat={heartbeat_text}, carStateFresh={carstate_alive}")
-  carstate_status = _label("정상" if carstate_alive else "실패", f"seen={services.get('carState', {}).get('seen')}, valid={services.get('carState', {}).get('valid')}, age={services.get('carState', {}).get('ageMs')}ms")
-  radar_status = _label("정상" if radar_tracks > 0 and not radar_error else "주의", f"tracks={radar_tracks}, errors={{{', '.join(f'{k}={radar_info.get(k)}' for k in ('canError', 'radarFault', 'wrongConfig', 'unavailableTemporary'))}}}")
-  panda_status = _label("실패" if active and controls_allowed and blocked_scc else "정보", f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
+  card_status = _label("진단 불가" if diagnostic_transport_unavailable else ("정상" if card_healthy else "실패"), f"process={card_running}, heartbeat={heartbeat_text}, carStateFresh={carstate_alive}")
+  carstate_status = _label("진단 불가" if diagnostic_transport_unavailable else ("정상" if carstate_alive else "실패"), f"seen={services.get('carState', {}).get('seen')}, valid={services.get('carState', {}).get('valid')}, age={services.get('carState', {}).get('ageMs')}ms")
+  radar_status = _label("진단 불가" if diagnostic_transport_unavailable else ("정상" if radar_tracks > 0 and not radar_error else "주의"), f"tracks={radar_tracks}, errors={{{', '.join(f'{k}={radar_info.get(k)}' for k in ('canError', 'radarFault', 'wrongConfig', 'unavailableTemporary'))}}}")
+  panda_status = _label("진단 불가" if diagnostic_transport_unavailable else ("실패" if active and controls_allowed and blocked_scc else "정보"), f"active={active}, controlsAllowed={controls_allowed}, rxInvalid={rx_invalid}, SCC blocked={blocked_scc}")
   restore_description = (
     "현재 8초 CAN에서 source0 SCC=0이고 takeover 완료·runtime guard 무장이 재확인됨"
     if takeover_verified and bool(marker.get("problem")) else str(marker.get("description"))
   )
   restore_status = _label("실패" if marker_problem else "정상", restore_description)
-  comm_status = _label("정상" if live_comm_ok else "주의", "현재 핵심 서비스 모두 alive/valid/freqOk (2초 warm-up 완료)" if live_comm_ok else "; ".join(live_comm_bad))
-  experimental_level = "정상" if experimental_param is True and experimental_live is True else ("정보" if experimental_param is False and experimental_live is False else "주의")
+  comm_status = _label(
+    "진단 불가" if diagnostic_transport_unavailable else ("정상" if live_comm_ok else "주의"),
+    f"실시간 메시지 전체 수신 {transport_sample_total}건" if diagnostic_transport_unavailable else
+    ("현재 핵심 서비스 모두 alive/valid/freqOk (2초 warm-up 완료)" if live_comm_ok else "; ".join(live_comm_bad)),
+  )
+  experimental_level = "진단 불가" if diagnostic_transport_unavailable else ("정상" if experimental_param is True and experimental_live is True else ("정보" if experimental_param is False and experimental_live is False else "주의"))
   experimental_status = _label(
     experimental_level,
     f"설정={_yes_no(experimental_param)}, 실제 selfdriveState={_yes_no(experimental_live)}, "
@@ -549,6 +572,7 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     "※ 통신 주파수는 당근/selfdrived처럼 충분한 수신 간격이 쌓인 뒤 판정합니다.",
     "※ 과거 commIssue 로그는 현재 핵심 서비스가 모두 정상일 때 첫 오류에서 제외합니다.",
     "※ 정상 상태값에 error/fault/unavailable이라는 키 이름만 포함된 경우 첫 오류로 올리지 않습니다.",
+    f"※ 실시간 메시지 총 수신={transport_sample_total}건. 전체 0건이면 차량 고장이 아닌 [진단 불가]로 분류합니다.",
     "",
     f"[핵심 프로세스] {process_text}",
     f"[takeover 마커] stage={marker.get('stage')} raw={marker.get('raw') or '없음'}",
@@ -581,6 +605,8 @@ def build_unified_report(core, report: str, duration: float = 8.0) -> str:
     },
     "liveCommOk": live_comm_ok,
     "liveCommProblems": live_comm_bad,
+    "diagnosticTransportUnavailable": diagnostic_transport_unavailable,
+    "transportSampleTotal": transport_sample_total,
     "flow": flow,
     "counts": {
       "stockScc": stock_scc,

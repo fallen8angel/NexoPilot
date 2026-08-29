@@ -28,7 +28,7 @@ assert "attempts: int = 3" in takeover
 assert "source0_scc_total" in takeover
 assert "disable_ecu" in takeover
 assert "prepend_ai_parity_report" in web
-assert 'NexoPilotWeb/7.9' in web
+assert 'NexoPilotWeb/8.0' in web
 assert "StableThreadingHTTPServer" in web
 assert "allow_reuse_address = True" in web
 assert "daemon_threads = True" in web

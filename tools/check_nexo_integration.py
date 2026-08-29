@@ -208,8 +208,8 @@ def validate_controller() -> None:
   for token in required:
     require(token in compact, f"controller cadence missing: {token}")
 
-  require("longitudinal_enabled = CC.longActive if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN else CC.enabled" in compact,
-          "NEXO longitudinal SCC must be gated by CC.longActive for MED/speed-control separation")
+  require("if self.CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN: longitudinal_enabled = CC.longActive and CS.out.cruiseState.enabled else: longitudinal_enabled = CC.enabled" in compact,
+          "NEXO longitudinal SCC must require CC.longActive and stock cruise enabled for immediate disengage")
 
 
 def validate_controlsd() -> None:

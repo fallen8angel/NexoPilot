@@ -23,11 +23,13 @@ Delegated validation contract retained for the NEXO integration checker:
 
 import html
 import json
+import os
 import socket
 import threading
 import time
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from cereal import car, messaging
@@ -45,6 +47,8 @@ from system.nexo_web import nexo_driver_monitoring_diagnostics as dm_diagnostics
 from system.nexo_web import nexo_panda_fault_diagnostics as panda_fault_diagnostics
 from system.nexo_web import nexo_runtime_guard_diagnostics as guard_diagnostics
 from system.nexo_web import nexo_unified_diagnostics as unified_diagnostics
+from system.nexo_web import nexo_golden_backup
+from system.nexo_web import nexo_long_logger
 from system.nexo_web import web_carrot_ui as carrot_ui
 from system.nexo_web import web_device_ui as device_ui
 from system.nexo_web import web_hud_ui as hud_ui
@@ -60,6 +64,9 @@ _last_diagnostic_lock = threading.Lock()
 _last_diagnostic: tuple[str, str] | None = None
 _diagnostic_capture_state = "idle"
 _diagnostic_capture_error = ""
+DIAGNOSTIC_CAPTURE_PATH = Path("/data/media/nexopilot-8sec-diagnostic.txt")
+DIAGNOSTIC_READY_WAIT_SECONDS = 10.0
+DIAGNOSTIC_READY_STABLE_SECONDS = 0.25
 remote_ui.install(carrot_ui)
 
 
@@ -85,11 +92,100 @@ def longitudinal_blackbox_output(duration: float = 8.0) -> str:
   return final_report.replace("\x00", "")
 
 
+def _wait_for_control_stack() -> dict[str, object]:
+  """Observe startup readiness without changing Params, CAN, Panda or controls."""
+  status: dict[str, object] = {
+    "ready": False,
+    "waited": 0.0,
+    "controls_ready": False,
+    "car_state_seen": False,
+    "selfdrive_state_seen": False,
+    "controls_state_seen": False,
+    "error": "",
+  }
+  started = time.monotonic()
+  try:
+    params = Params()
+    sm = messaging.SubMaster(["carState", "selfdriveState", "controlsState"])
+    ready_since: float | None = None
+    while True:
+      sm.update(100)
+      now = time.monotonic()
+      status["controls_ready"] = params.get_bool("ControlsReady")
+      status["car_state_seen"] = bool(sm.seen["carState"])
+      status["selfdrive_state_seen"] = bool(sm.seen["selfdriveState"])
+      status["controls_state_seen"] = bool(sm.seen["controlsState"])
+      core_seen = bool(
+        status["car_state_seen"] and
+        status["selfdrive_state_seen"] and
+        status["controls_state_seen"]
+      )
+      if status["controls_ready"] and core_seen:
+        if ready_since is None:
+          ready_since = now
+        elif now - ready_since >= DIAGNOSTIC_READY_STABLE_SECONDS:
+          status["ready"] = True
+          break
+      else:
+        ready_since = None
+      if now - started >= DIAGNOSTIC_READY_WAIT_SECONDS:
+        break
+  except Exception as error:
+    status["error"] = f"{type(error).__name__}: {error}"
+  status["waited"] = time.monotonic() - started
+  return status
+
+
+def _format_diagnostic_warmup(status: dict[str, object]) -> str:
+  lines = [
+    "[0] 진단 시작 준비 상태",
+    (
+      f"사전 대기={float(status.get('waited', 0.0)):.2f}초 | "
+      f"ControlsReady={bool(status.get('controls_ready', False))} | "
+      f"carState seen={bool(status.get('car_state_seen', False))} | "
+      f"selfdriveState seen={bool(status.get('selfdrive_state_seen', False))} | "
+      f"controlsState seen={bool(status.get('controls_state_seen', False))}"
+    ),
+    (
+      "[준비 완료] 제어 스택이 안정적으로 올라온 뒤 8초 본 관측을 시작했습니다."
+      if status.get("ready") else
+      "[주의] 최대 사전 대기 안에 제어 스택 준비가 완료되지 않아 현재 상태 그대로 8초 관측했습니다."
+    ),
+  ]
+  if status.get("error"):
+    lines.append(f"사전 준비 관측 오류: {status['error']}")
+  return "\n".join(lines) + "\n\n"
+
+
+def _persist_last_diagnostic(capture: str) -> None:
+  DIAGNOSTIC_CAPTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
+  temporary = DIAGNOSTIC_CAPTURE_PATH.with_name(
+    DIAGNOSTIC_CAPTURE_PATH.name + f".{os.getpid()}.tmp"
+  )
+  try:
+    with open(temporary, "w", encoding="utf-8") as output:
+      output.write(capture)
+      output.flush()
+      os.fsync(output.fileno())
+    os.replace(temporary, DIAGNOSTIC_CAPTURE_PATH)
+  except Exception:
+    try:
+      temporary.unlink()
+    except OSError:
+      pass
+    raise
+
+
 def _capture_diagnostic_in_background() -> None:
   global _last_diagnostic, _diagnostic_capture_state, _diagnostic_capture_error
   try:
-    capture = longitudinal_blackbox_output()
-    filename = f"nexo-long-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+    warmup = _wait_for_control_stack()
+    capture = _format_diagnostic_warmup(warmup) + longitudinal_blackbox_output()
+    filename = f"nexopilot-8sec-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+    try:
+      _persist_last_diagnostic(capture)
+    except Exception as error:
+      capture += f"\n\n[파일 저장 주의] 고정 경로 저장 실패: {type(error).__name__}: {error}\n"
     with _last_diagnostic_lock:
       _last_diagnostic = (capture, filename)
       _diagnostic_capture_state = "ready"
@@ -102,7 +198,7 @@ def _capture_diagnostic_in_background() -> None:
 
 def diagnostic_wait_page() -> str:
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 진단 수집 중</title><style>{carrot_ui._css(core)}</style></head><body><main>
-  <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>8초 진단 수집 중</h1><div class="mini" id="capture-status">기기에서 진단을 수집하고 있습니다. 이 연결은 오래 유지하지 않습니다.</div></div>
+  <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>통합진단 수집 중</h1><div class="mini" id="capture-status">제어 스택을 최대 10초 확인한 뒤 8초 진단을 수집합니다. 이 연결은 오래 유지하지 않습니다.</div></div>
   <div class="card"><div class="title">잠시만 기다려 주세요</div><div class="desc">완료되면 저장된 파일을 짧은 요청으로 자동 다운로드합니다. 자동으로 받지 못하면 아래 버튼을 누르세요.</div>
   <form id="download-form" method="post" action="/diagnostics/download-last"><button class="secondary">완료된 파일 받기</button></form></div>
   {carrot_ui._nav("diagnostics")}</main>
@@ -129,11 +225,44 @@ def diagnostic_wait_page() -> str:
 
 
 def diagnostic_page(message: str = "") -> str:
-  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 8초 통합진단</title><style>{carrot_ui._css(core)}</style></head><body><main>
-  <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>8초 통합진단</h1><div class="mini">차량 상태와 주요 오류를 8초 동안 읽기 전용으로 수집합니다.</div></div>
+  long_status = nexo_long_logger.status()
+  golden_status = nexo_golden_backup.status()
+  long_initial = "기록 중" if long_status.get("active") else ("완료 파일 있음" if long_status.get("finished") else "대기")
+  golden_initial = str(golden_status.get("message") or ("진행 중" if golden_status.get("active") else "대기"))
+  return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 통합진단</title><style>{carrot_ui._css(core)}</style></head><body><main>
+  <div class="hero"><div class="eyebrow">NEXOPILOT · DIAGNOSTICS</div><h1>통합진단·포렌식</h1><div class="mini">차량 제어를 변경하지 않고 진단 근거와 재현 자료를 수집합니다.</div></div>
   {carrot_ui._message(message)}
-  <div class="card"><div class="title">통합진단 파일</div><div class="desc">P단 정지 상태에서 실행하면 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태와 오류를 파일 하나로 저장합니다. 차량 제어에는 관여하지 않습니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form><form method="post" action="/diagnostics/download-last"><button class="secondary">방금 진단 파일 다시 다운받기</button></form><div class="desc">다시 다운받기는 새로 8초를 수집하지 않고, 방금 완료된 동일한 진단 파일을 다시 내려받습니다.</div></div>
-  {carrot_ui._nav("diagnostics")}</main></body></html>'''
+  <div class="card"><div class="title">8초 통합진단 파일</div><div class="desc">제어 스택을 최대 10초 기다린 뒤 차량 인식·운전자 감시·레이더·SCC/FCA·Panda 안전 상태를 8초간 수집합니다. 실시간 메시지가 전부 0건이면 차량 고장이 아닌 ‘진단 불가’로 표시합니다.</div><form method="post" action="/diagnostics/capture"><button>8초 통합진단 파일 하나 받기</button></form><form method="post" action="/diagnostics/download-last"><button class="secondary">방금 진단 파일 다시 다운받기</button></form><div class="desc">다시 다운받기는 새로 수집하지 않고 방금 완료된 동일한 파일을 내려받습니다.</div></div>
+  <div class="card"><div class="title">장시간 개발 로그</div><div class="desc">주행 전 시작하고 주행 후 종료하면 cereal 원문, 수신·송신 CAN, SCC/FCA·레이더·UDS·버튼 집계, 설정·Git 상태와 같은 시간대 rlog/qlog를 묶습니다. 차량에 명령을 보내지 않습니다. 위치·주행 정보가 포함될 수 있으므로 외부 공유 전 확인하세요.</div><div class="mini" id="long-log-status">{html.escape(long_initial)}</div><form method="post" action="/diagnostics/long/start"><button>장시간 로그 시작</button></form><form method="post" action="/diagnostics/long/stop"><button class="secondary">장시간 로그 종료·압축</button></form><div id="long-log-links"{'' if long_status.get('report_path') or long_status.get('archive_path') else ' hidden'}><a href="/diagnostics/long/report"><button class="secondary" type="button">요약 보고서 보기</button></a><a href="/diagnostics/long/download"><button class="secondary" type="button">전체 로그 묶음 받기</button></a></div></div>
+  <div class="card"><div class="title">골든 레퍼런스 백업</div><div class="desc">현재 NexoPilot 코드·dirty 변경·차량 Params·CarParams·런타임 상태·최근 주행 로그·진단 파일과 SHA-256 목록을 한 번에 보존합니다. 저장 부하를 고려해 P단·완전 정지·크루즈 비활성에서만 시작합니다.</div><div class="mini" id="golden-status">{html.escape(golden_initial)}</div><form method="post" action="/diagnostics/golden/start"><button>골든 백업 만들기</button></form><div id="golden-links"{'' if golden_status.get('manifest_path') or golden_status.get('archive_path') else ' hidden'}><a href="/diagnostics/golden/manifest"><button class="secondary" type="button">백업 명세 보기</button></a><a href="/diagnostics/golden/download"><button class="secondary" type="button">골든 백업 받기</button></a></div></div>
+  {carrot_ui._nav("diagnostics")}</main>
+  <script>
+  function elapsedText(value){{
+    const seconds=Math.max(0,Number(value)||0);
+    return seconds<60 ? seconds.toFixed(1)+"초" : Math.floor(seconds/60)+"분 "+Math.floor(seconds%60)+"초";
+  }}
+  async function refreshForensics(){{
+    try {{
+      const response=await fetch("/api/long-log-status", {{cache:"no-store"}});
+      const data=await response.json();
+      let text=data.active ? (data.finalizing ? "종료·압축 중 · " : "기록 중 · ")+elapsedText(data.elapsed) : (data.finished ? "기록 완료 · "+elapsedText(data.elapsed) : "대기");
+      if(data.error) text+=" · "+data.error;
+      document.getElementById("long-log-status").textContent=text;
+      document.getElementById("long-log-links").hidden=!(data.report_path||data.archive_path);
+    }} catch(error) {{ document.getElementById("long-log-status").textContent="상태 확인 실패"; }}
+    try {{
+      const response=await fetch("/api/golden-backup-status", {{cache:"no-store"}});
+      const data=await response.json();
+      let text=data.message||"대기";
+      if(data.active) text+=" · "+String(data.progress||0)+"%";
+      if(data.error) text+=" · "+data.error;
+      document.getElementById("golden-status").textContent=text;
+      document.getElementById("golden-links").hidden=!(data.manifest_path||data.archive_path);
+    }} catch(error) {{ document.getElementById("golden-status").textContent="상태 확인 실패"; }}
+    setTimeout(refreshForensics, 1500);
+  }}
+  refreshForensics();
+  </script></body></html>'''
 
 def live_page() -> str:
   return carrot_ui.enhance_legacy_page(core, _original_live_page(), "camera")
@@ -223,7 +352,7 @@ carrot_ui.stationary_gate = _device_stationary_gate
 
 
 class CarrotStyleHandler(_original_handler):
-  server_version = "NexoPilotWeb/7.9"
+  server_version = "NexoPilotWeb/8.0"
 
   def _same_origin(self) -> bool:
     """Accept legitimate same-site form posts through a remote reverse proxy."""
@@ -290,6 +419,52 @@ class CarrotStyleHandler(_original_handler):
       self._send("설정 값을 읽을 수 없습니다.", HTTPStatus.BAD_REQUEST)
       return None
 
+  def _send_forensic_file(
+    self,
+    path: str | None,
+    filename: str,
+    content_type: str,
+    allowed_location: Path,
+    *,
+    attachment: bool,
+    allow_descendants: bool = False,
+  ) -> None:
+    if not path:
+      self._send("아직 완료된 파일이 없습니다.", HTTPStatus.NOT_FOUND)
+      return
+    try:
+      requested = Path(path)
+      if requested.is_symlink() or allowed_location.is_symlink():
+        raise PermissionError("심볼릭 링크 진단 파일은 내려받을 수 없습니다.")
+      target = requested.resolve(strict=True)
+      allowed = allowed_location.resolve()
+      path_allowed = target == allowed or (allow_descendants and allowed in target.parents)
+      if not path_allowed:
+        raise PermissionError("허용된 진단 저장 경로가 아닙니다.")
+      if not target.is_file():
+        raise FileNotFoundError(path)
+      size = target.stat().st_size
+      source = open(target, "rb")
+    except (OSError, RuntimeError) as error:
+      self._send(f"파일을 열 수 없습니다: {html.escape(str(error))}", HTTPStatus.NOT_FOUND)
+      return
+
+    try:
+      self.send_response(HTTPStatus.OK)
+      self.send_header("Content-Type", content_type)
+      disposition = "attachment" if attachment else "inline"
+      self.send_header("Content-Disposition", f'{disposition}; filename="{filename}"')
+      self.send_header("Content-Length", str(size))
+      self.send_header("Cache-Control", "no-store")
+      self.send_header("X-Content-Type-Options", "nosniff")
+      self.end_headers()
+      while chunk := source.read(1024 * 1024):
+        self.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError):
+      pass
+    finally:
+      source.close()
+
   def do_GET(self) -> None:
     parsed = urlparse(self.path)
     query = parse_qs(parsed.query)
@@ -306,11 +481,41 @@ class CarrotStyleHandler(_original_handler):
         error = _diagnostic_capture_error
       messages = {
         "idle": "진단 대기 중",
-        "running": "8초 통합진단을 기기에서 수집하고 있습니다.",
+        "running": "제어 스택을 최대 10초 확인한 뒤 8초 통합진단을 수집하고 있습니다.",
         "ready": "진단 완료 · 파일 다운로드를 시작합니다.",
         "error": f"진단 실패: {error or '원인 확인 불가'}",
       }
       self._send_json(json.dumps({"state": state, "message": messages.get(state, state)}, ensure_ascii=False).encode("utf-8"))
+      return
+    if parsed.path == "/api/long-log-status":
+      self._send_json(json.dumps(nexo_long_logger.status(), ensure_ascii=False, default=str).encode("utf-8"))
+      return
+    if parsed.path == "/api/golden-backup-status":
+      self._send_json(json.dumps(nexo_golden_backup.status(), ensure_ascii=False, default=str).encode("utf-8"))
+      return
+    if parsed.path == "/diagnostics/long/report":
+      self._send_forensic_file(
+        nexo_long_logger.report_path(), "nexo-long-log-report.txt", "text/plain; charset=utf-8",
+        Path(nexo_long_logger.BASE_DIR), attachment=False, allow_descendants=True,
+      )
+      return
+    if parsed.path == "/diagnostics/long/download":
+      self._send_forensic_file(
+        nexo_long_logger.archive_path(), "nexo-long-log-latest.tar.gz", "application/gzip",
+        Path(nexo_long_logger.LATEST_ARCHIVE), attachment=True,
+      )
+      return
+    if parsed.path == "/diagnostics/golden/manifest":
+      self._send_forensic_file(
+        nexo_golden_backup.manifest_path(), "nexopilot-golden-manifest.txt", "text/plain; charset=utf-8",
+        nexo_golden_backup.LATEST_MANIFEST, attachment=False,
+      )
+      return
+    if parsed.path == "/diagnostics/golden/download":
+      self._send_forensic_file(
+        nexo_golden_backup.archive_path(), "nexopilot-golden-backup.tar.gz", "application/gzip",
+        nexo_golden_backup.LATEST_ARCHIVE, attachment=True,
+      )
       return
     if parsed.path == "/api/hud":
       self._send_json(hud_ui.hud_status_json(core))
@@ -337,6 +542,33 @@ class CarrotStyleHandler(_original_handler):
 
   def do_POST(self) -> None:
     parsed = urlparse(self.path)
+
+    if parsed.path in (
+      "/diagnostics/long/start",
+      "/diagnostics/long/stop",
+      "/diagnostics/golden/start",
+    ):
+      if not self._same_origin():
+        self._send("요청 출처를 확인할 수 없습니다.", HTTPStatus.FORBIDDEN)
+        return
+      try:
+        if parsed.path == "/diagnostics/long/start":
+          result = nexo_long_logger.start()
+          message = "장시간 개발 로그 기록을 시작했습니다." if result.get("ok") else str(result.get("error") or "장시간 로그를 시작하지 못했습니다.")
+        elif parsed.path == "/diagnostics/long/stop":
+          result = nexo_long_logger.stop(timeout=0.0)
+          message = "장시간 로그 종료·압축을 요청했습니다." if result.get("ok") or result.get("processing") else str(result.get("error") or "장시간 로그를 종료하지 못했습니다.")
+        else:
+          # Source/Params/runtime collection and route compression can be I/O
+          # intensive. Start the read-only backup only while safely parked.
+          if not self._require_parked("/diagnostics"):
+            return
+          result = nexo_golden_backup.start()
+          message = "골든 레퍼런스 백업을 시작했습니다." if result.get("ok") else str(result.get("error") or "골든 백업을 시작하지 못했습니다.")
+      except Exception as error:
+        message = f"진단 도구 실행 실패: {type(error).__name__}: {error}"
+      self._redirect(message[:240], "/diagnostics")
+      return
 
     if parsed.path in ("/diagnostics/capture", "/diagnostics/download-last"):
       if not self._same_origin():

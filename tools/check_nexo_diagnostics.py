@@ -17,6 +17,8 @@ DIAGNOSTIC_FILES = (
   "system/nexo_web/nexo_cluster_warning_diagnostics.py",
   "system/nexo_web/nexo_cluster_warning_policy.py",
   "system/nexo_web/nexo_ai_parity_diagnostics.py",
+  "system/nexo_web/nexo_long_logger.py",
+  "system/nexo_web/nexo_golden_backup.py",
   "opendbc_repo/opendbc/car/hyundai/radar_tracks.py",
   "opendbc_repo/opendbc/car/hyundai/interface.py",
   "opendbc_repo/opendbc/car/hyundai/nexo_takeover.py",
@@ -50,6 +52,8 @@ def main() -> None:
   warning_web = sources["system/nexo_web/nexo_cluster_warning_diagnostics.py"]
   warning_policy = sources["system/nexo_web/nexo_cluster_warning_policy.py"]
   ai_parity = sources["system/nexo_web/nexo_ai_parity_diagnostics.py"]
+  long_logger = sources["system/nexo_web/nexo_long_logger.py"]
+  golden_backup = sources["system/nexo_web/nexo_golden_backup.py"]
   radar = sources["opendbc_repo/opendbc/car/hyundai/radar_tracks.py"]
   interface = sources["opendbc_repo/opendbc/car/hyundai/interface.py"]
   takeover = sources["opendbc_repo/opendbc/car/hyundai/nexo_takeover.py"]
@@ -92,9 +96,26 @@ def main() -> None:
                 "controlsAllowed=False와 Panda 차단은 P단·크루즈 비활성 중에는 정상",
                 "def _marker_snapshot", "longitudinal_takeover_ready", "restore_pending",
                 "def correct_legacy_wording", "brand", "card_healthy", "sm.seen",
-                "takeover_verified", "marker_problem", "takeoverVerifiedByCurrentCapture"):
+                "takeover_verified", "marker_problem", "takeoverVerifiedByCurrentCapture",
+                "_transport_sample_total", "diagnostic_transport_unavailable",
+                'overall = _label("진단 불가", "openpilot 실시간 메시지 전체 수신 0건")',
+                '"diagnosticTransportUnavailable"', '"transportSampleTotal"'):
     require(token in unified, f"unified 8-second diagnostics missing: {token}")
   require("cp.carName" not in unified, "CarParams has no carName member in this schema")
+
+  unified_tree = ast.parse(unified, filename="system/nexo_web/nexo_unified_diagnostics.py")
+  transport_helper = next(
+    node for node in unified_tree.body
+    if isinstance(node, ast.FunctionDef) and node.name == "_transport_sample_total"
+  )
+  transport_namespace: dict[str, object] = {}
+  exec(compile(ast.Module(body=[transport_helper], type_ignores=[]), "transport-helper", "exec"), transport_namespace)
+  transport_count = transport_namespace["_transport_sample_total"]
+  require(callable(transport_count), "transport sample helper is not callable")
+  require(transport_count({"carState": {"sampleCount": 0}, "snapshotError": {"sampleCount": 99}}) == 0,
+          "snapshotError must not make an all-zero cereal capture look available")
+  require(transport_count({"carState": {"sampleCount": 2}, "radarState": {"sampleCount": 3}}) == 5,
+          "transport sample helper must sum live service samples")
 
   for token in ("NEXO runtime guard·검사 단계 확인", "P단 정지 검사", "주행 활성 검사:", "\"미실시\"",
                 "현재 부팅 기록", "source0 SCC", "runtime guard가 무장되지 않았습니다",
@@ -133,13 +154,45 @@ def main() -> None:
   require("warning_diagnostics.prepend_cluster_warning_report" in entry, "cluster warning report not wired")
   require("warning_policy.correct_stationary_cluster_warning" in entry, "park warning policy not wired")
   require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
-  require("NexoPilotWeb/7.9" in entry, "port 7000 server version not advanced for proxied remote diagnostics")
+  require("NexoPilotWeb/8.0" in entry, "port 7000 server version not advanced for forensic diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
   for token in ("_last_diagnostic_lock", "_last_diagnostic = (capture, filename)",
                 'parsed.path == "/diagnostics/capture"', '"/diagnostics/download-last"',
                 "방금 진단 파일 다시 다운받기",
-                "새로 8초를 수집하지 않고, 방금 완료된 동일한 진단 파일"):
+                "다시 다운받기는 새로 수집하지 않고 방금 완료된 동일한 파일"):
     require(token in entry, f"last completed diagnostic re-download contract missing: {token}")
+  for token in ("def _wait_for_control_stack", "DIAGNOSTIC_READY_WAIT_SECONDS = 10.0",
+                "DIAGNOSTIC_READY_STABLE_SECONDS = 0.25", 'params.get_bool("ControlsReady")',
+                'messaging.SubMaster(["carState", "selfdriveState", "controlsState"])',
+                "def _persist_last_diagnostic", "/data/media/nexopilot-8sec-diagnostic.txt"):
+    require(token in entry, f"diagnostic readiness/persistence contract missing: {token}")
+  entry_tree = ast.parse(entry, filename="system/nexo_web/web.py")
+  warmup_function = next(
+    node for node in entry_tree.body
+    if isinstance(node, ast.FunctionDef) and node.name == "_wait_for_control_stack"
+  )
+  warmup_source = ast.unparse(warmup_function)
+  for forbidden in ("put_bool(", "pub_sock(", "can_send(", "set_safety_model("):
+    require(forbidden not in warmup_source, f"diagnostic warm-up must remain observation-only: {forbidden}")
+  for token in ('parsed.path == "/api/long-log-status"', 'parsed.path == "/api/golden-backup-status"',
+                '"/diagnostics/long/start"', '"/diagnostics/long/stop"',
+                '"/diagnostics/long/download"', '"/diagnostics/golden/start"',
+                '"/diagnostics/golden/download"', "def _send_forensic_file"):
+    require(token in entry, f"forensic web route missing: {token}")
+
+  for token in ("NEXO_LONG_LOG_V1", "raw_events.bin", "events.jsonl", "can_rx.csv",
+                "sendcan_tx.csv", "matching_rlog_qlog.json", "SOURCE_SCAN_ROOTS",
+                "MIN_FREE_BYTES", "MAX_ROUTE_LOG_BUNDLE_BYTES", "_recover_interrupted_session",
+                "def start", "def stop", "def status", "def report_path", "def archive_path"):
+    require(token in long_logger, f"long logger contract missing: {token}")
+  for token in ("NexoPilot 골든 레퍼런스 백업", "SOURCE_DIRTY", "CarParamsPersistent",
+                "selected_rlog_qlog.json", "SHA256SUMS.txt", "NEXOPILOT_GOLDEN_COMPLETE",
+                "MIN_FREE_BYTES", "_redact_git_remote", '"access", "dongleid"',
+                "def start", "def status", "def manifest_path", "def archive_path"):
+    require(token in golden_backup, f"golden backup contract missing: {token}")
+  for source in (long_logger, golden_backup):
+    for forbidden in ("messaging.pub_sock(", "can_send(", "set_safety_model(", "put_bool(", "disable_ecu("):
+      require(forbidden not in source, f"forensic collectors must not change vehicle control state: {forbidden}")
   for token in ("UDS TX", "UDS RX", "UDS ERROR", "request.hex(' ')"):
     require(token in radar, f"radar UDS diagnostics missing: {token}")
   require("def _trace_nexo_long_init" in interface, "NEXO init trace helper missing")

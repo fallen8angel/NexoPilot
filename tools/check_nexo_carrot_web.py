@@ -148,8 +148,14 @@ required_web = (
   'parsed.path == "/update/reboot"',
   '_parked_gate(require_parking_brake=False)',
   "core.TOGGLES = list(carrot_ui.TOGGLES)",
-  'server_version = "NexoPilotWeb/7.9"',
+  'server_version = "NexoPilotWeb/8.0"',
   'Params().put("LongitudinalPersonality", personality)',
+  'action="/diagnostics/long/start"',
+  'action="/diagnostics/long/stop"',
+  'action="/diagnostics/golden/start"',
+  'parsed.path == "/api/long-log-status"',
+  'parsed.path == "/api/golden-backup-status"',
+  "차량에 명령을 보내지 않습니다.",
 )
 for token in required_web:
   if token not in web:
