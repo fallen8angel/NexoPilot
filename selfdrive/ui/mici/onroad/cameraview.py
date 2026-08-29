@@ -325,6 +325,14 @@ class CameraView(Widget):
     rl.set_shader_value(self.shader, self._enhance_driver_loc, self._enhance_driver_val, rl.ShaderUniformDataType.SHADER_UNIFORM_INT)
 
   def _ensure_connection(self) -> bool:
+    # close() intentionally clears the VisionIPC client. A final queued render
+    # can still arrive during dialog/view teardown, so treat that frame as
+    # disconnected instead of dereferencing None and crashing the UI process.
+    if self.client is None:
+      self.frame = None
+      self.available_streams.clear()
+      return False
+
     if not self.client.is_connected():
       self.frame = None
       self.available_streams.clear()
