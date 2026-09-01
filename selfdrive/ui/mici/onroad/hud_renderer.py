@@ -3,6 +3,11 @@ import time
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
+from openpilot.selfdrive.selfdrived.nexo_experimental_mode import (
+  is_nexo_fingerprint,
+  nexo_experimental_icon_visible,
+  nexo_med_phase,
+)
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -30,6 +35,7 @@ class FontSizes:
   max_speed: int = 36
   set_speed: int = 112
   gear: int = 58
+  med_phase: int = 25
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,8 @@ class Colors:
   WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
   GEAR_BG = rl.Color(0, 0, 0, 150)
   GEAR_BORDER = rl.Color(255, 255, 255, 75)
+  MED_WAIT = rl.Color(95, 170, 255, 245)
+  SPEED_ACTIVE = rl.Color(128, 216, 166, 245)
 
 
 FONT_SIZES = FontSizes()
@@ -118,6 +126,7 @@ class HudRenderer(Widget):
     self.right_blinker: bool = False
     self.gear_text: str = "–"
     self.experimental_mode: bool = False
+    self.med_phase: str = ""
 
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
@@ -180,7 +189,7 @@ class HudRenderer(Widget):
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
-    self.experimental_mode = bool(sm['selfdriveState'].experimentalMode)
+    actual_experimental = bool(sm['selfdriveState'].experimentalMode)
 
     if sm.recv_frame["carState"] < ui_state.started_frame:
       self.is_cruise_set = False
@@ -191,11 +200,19 @@ class HudRenderer(Widget):
       self.left_blinker = False
       self.right_blinker = False
       self.gear_text = "–"
+      self.experimental_mode = False
+      self.med_phase = ""
       return
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
     car_control = sm['carControl']
+    cp = ui_state.CP
+    fingerprint = getattr(cp, "carFingerprint", None) if cp is not None else None
+    is_nexo = is_nexo_fingerprint(fingerprint)
+    speed_control_active = bool(car_state.cruiseState.enabled)
+    self.experimental_mode = nexo_experimental_icon_visible(is_nexo, speed_control_active, actual_experimental)
+    self.med_phase = nexo_med_phase(is_nexo, bool(car_state.cruiseState.available), speed_control_active)
 
     v_cruise_cluster = car_state.vCruiseCluster
     set_speed = (
@@ -230,6 +247,7 @@ class HudRenderer(Widget):
     self._draw_turn_indicators(rect)
     self._draw_gear(rect)
     self._draw_experimental_mode(rect)
+    self._draw_med_phase(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
@@ -275,6 +293,23 @@ class HudRenderer(Widget):
     x = int(rect.x + rect.width - self._txt_experimental_mode.width - margin)
     y = int(rect.y + margin)
     rl.draw_texture_ex(self._txt_experimental_mode, rl.Vector2(x, y), 0.0, 1.0, rl.WHITE)
+
+  def _draw_med_phase(self, rect: rl.Rectangle) -> None:
+    if not self.med_phase:
+      return
+
+    width = 112
+    height = 42
+    x = rect.x + (rect.width - width) / 2
+    y = rect.y + 14
+    badge = rl.Rectangle(x, y, width, height)
+    color = COLORS.SPEED_ACTIVE if self.med_phase == "SPEED" else COLORS.MED_WAIT
+    rl.draw_rectangle_rounded(badge, 0.45, 8, COLORS.GEAR_BG)
+    rl.draw_rectangle_rounded_lines_ex(badge, 0.45, 8, 2, color)
+    text_size = measure_text_cached(self._font_semi_bold, self.med_phase, FONT_SIZES.med_phase)
+    rl.draw_text_ex(self._font_semi_bold, self.med_phase,
+                    rl.Vector2(x + (width - text_size.x) / 2, y + (height - text_size.y) / 2),
+                    FONT_SIZES.med_phase, 0, color)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel

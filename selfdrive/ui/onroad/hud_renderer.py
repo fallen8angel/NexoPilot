@@ -2,6 +2,7 @@ import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.common.nexo_vnavi import read_vnavi_state
+from openpilot.selfdrive.selfdrived.nexo_experimental_mode import is_nexo_fingerprint, nexo_med_phase
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -37,6 +38,7 @@ class FontSizes:
   max_speed: int = 40
   set_speed: int = 90
   exp_badge: int = 34
+  med_badge: int = 28
   vnavi: int = 36
   gear: int = 70
   cruise_gap: int = 40
@@ -61,6 +63,7 @@ class Colors:
   TURN_ACTIVE = rl.Color(80, 220, 120, 255)
   TURN_INACTIVE = rl.Color(170, 170, 170, 115)
   EXP_ACTIVE = rl.Color(128, 216, 166, 245)
+  MED_WAIT = rl.Color(95, 170, 255, 245)
   VNAVI = rl.Color(210, 165, 255, 255)
   GEAR_GREEN = rl.Color(0, 255, 0, 210)
 
@@ -82,6 +85,7 @@ class HudRenderer(Widget):
     self.left_blinker: bool = False
     self.right_blinker: bool = False
     self.experimental_mode: bool = False
+    self.med_phase: str = ""
     self.gear_text: str = "–"
     self.cruise_gap: int = 0
     self.vnavi_active: bool = False
@@ -118,6 +122,7 @@ class HudRenderer(Widget):
       self.speed = 0.0
       self.left_blinker = False
       self.right_blinker = False
+      self.med_phase = ""
       self.gear_text = "–"
       self.cruise_gap = 0
       self.vnavi_active = False
@@ -127,6 +132,13 @@ class HudRenderer(Widget):
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
+    cp = ui_state.CP
+    fingerprint = getattr(cp, "carFingerprint", None) if cp is not None else None
+    self.med_phase = nexo_med_phase(
+      is_nexo_fingerprint(fingerprint),
+      bool(car_state.cruiseState.available),
+      bool(car_state.cruiseState.enabled),
+    )
 
     v_cruise_cluster = car_state.vCruiseCluster
     self.set_speed = (
@@ -195,6 +207,7 @@ class HudRenderer(Widget):
     button_y = rect.y + UI_CONFIG.border_size
     self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
     self._draw_experimental_badge(button_x, button_y)
+    self._draw_med_badge(button_x, button_y)
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
@@ -307,6 +320,24 @@ class HudRenderer(Widget):
     rl.draw_text_ex(self._font_semi_bold, text,
                     rl.Vector2(x + (badge_w - text_size.x) / 2, y + (badge_h - text_size.y) / 2),
                     FONT_SIZES.exp_badge, 0, COLORS.EXP_ACTIVE)
+
+  def _draw_med_badge(self, button_x: float, button_y: float) -> None:
+    """Show whether MED is waiting for SET/RES or actively controlling speed."""
+    if not self.med_phase:
+      return
+
+    badge_w = 126
+    badge_h = 48
+    x = button_x + (UI_CONFIG.button_size - badge_w) / 2
+    y = button_y + UI_CONFIG.button_size + (68 if self.experimental_mode else 8)
+    badge = rl.Rectangle(x, y, badge_w, badge_h)
+    color = COLORS.ENGAGED if self.med_phase == "SPEED" else COLORS.MED_WAIT
+    rl.draw_rectangle_rounded(badge, 0.45, 8, COLORS.BLACK_TRANSLUCENT)
+    rl.draw_rectangle_rounded_lines_ex(badge, 0.45, 8, 3, color)
+    text_size = measure_text_cached(self._font_semi_bold, self.med_phase, FONT_SIZES.med_badge)
+    rl.draw_text_ex(self._font_semi_bold, self.med_phase,
+                    rl.Vector2(x + (badge_w - text_size.x) / 2, y + (badge_h - text_size.y) / 2),
+                    FONT_SIZES.med_badge, 0, color)
 
   def _draw_gear(self, rect: rl.Rectangle) -> None:
     """Show XPlus-sized P/R/N/D gear and following-distance number at lower-right."""

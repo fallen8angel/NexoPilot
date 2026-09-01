@@ -11,12 +11,33 @@ MIN_SWITCH_SPEED_KPH = 10
 MAX_SWITCH_SPEED_KPH = 100
 SWITCH_SPEED_STEP_KPH = 5
 HYSTERESIS_KPH = 2.0
+NEXO_FINGERPRINT = "HYUNDAI_NEXO_1ST_GEN"
 
 
 @dataclass(frozen=True)
 class NexoExperimentalSpeedSettings:
   enabled: bool = False
   speed_kph: int = DEFAULT_SWITCH_SPEED_KPH
+
+
+def is_nexo_fingerprint(fingerprint: object) -> bool:
+  """Accept both capnp enum values and their string representation."""
+  return getattr(fingerprint, "name", str(fingerprint)) == NEXO_FINGERPRINT
+
+
+def nexo_med_phase(is_nexo: bool, cruise_available: bool, speed_control_active: bool) -> str:
+  """Return the short driver-facing MED phase used by both onroad UIs."""
+  if not is_nexo or not cruise_available:
+    return ""
+  return "SPEED" if speed_control_active else "MED"
+
+
+def nexo_experimental_icon_visible(is_nexo: bool, speed_control_active: bool,
+                                   actual_experimental: bool) -> bool:
+  """Mici follows XPlus: its EXP icon describes active MED speed control only."""
+  if is_nexo:
+    return bool(speed_control_active and actual_experimental)
+  return bool(actual_experimental)
 
 
 def normalize_speed_kph(value: object) -> int:

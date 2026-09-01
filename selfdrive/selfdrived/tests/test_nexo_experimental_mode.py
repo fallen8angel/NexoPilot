@@ -1,5 +1,8 @@
 from openpilot.selfdrive.selfdrived.nexo_experimental_mode import (
   NexoExperimentalModeController,
+  is_nexo_fingerprint,
+  nexo_experimental_icon_visible,
+  nexo_med_phase,
   normalize_speed_kph,
 )
 
@@ -31,3 +34,17 @@ def test_med_wait_and_configurable_speed_hysteresis():
   assert not controller.update(True, True, True, 32.0, False, 30)
   assert not controller.update(True, True, True, 30.0, False, 30)
   assert controller.update(True, True, True, 28.0, False, 30)
+
+
+def test_med_phase_and_mici_experimental_visibility():
+  assert is_nexo_fingerprint("HYUNDAI_NEXO_1ST_GEN")
+  assert not is_nexo_fingerprint("HYUNDAI_IONIQ_5")
+  assert nexo_med_phase(True, False, False) == ""
+  assert nexo_med_phase(True, True, False) == "MED"
+  assert nexo_med_phase(True, True, True) == "SPEED"
+
+  # MED wait can prepare the model, but the compact EXP icon means active
+  # experimental speed control and therefore stays hidden until SET/RES.
+  assert not nexo_experimental_icon_visible(True, False, True)
+  assert nexo_experimental_icon_visible(True, True, True)
+  assert nexo_experimental_icon_visible(False, False, True)

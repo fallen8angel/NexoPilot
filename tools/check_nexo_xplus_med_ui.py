@@ -10,6 +10,8 @@ def text(path: str) -> str:
 
 
 controlsd = text("selfdrive/controls/controlsd.py")
+selfdrived = text("selfdrive/selfdrived/selfdrived.py")
+nexo_experimental = text("selfdrive/selfdrived/nexo_experimental_mode.py")
 nexo_med = text("opendbc_repo/opendbc/car/hyundai/nexo_med.py")
 main_ui = text("selfdrive/ui/layouts/main.py")
 hud = text("selfdrive/ui/onroad/hud_renderer.py")
@@ -17,9 +19,12 @@ onroad_init = text("selfdrive/ui/onroad/__init__.py")
 exp_button = text("selfdrive/ui/onroad/exp_button.py")
 mici_view = text("selfdrive/ui/mici/onroad/augmented_road_view.py")
 mici_hud = text("selfdrive/ui/mici/onroad/hud_renderer.py")
+web_ui = text("system/nexo_web/web_carrot_ui.py")
 
 for path, source in (
   ("selfdrive/controls/controlsd.py", controlsd),
+  ("selfdrive/selfdrived/selfdrived.py", selfdrived),
+  ("selfdrive/selfdrived/nexo_experimental_mode.py", nexo_experimental),
   ("opendbc_repo/opendbc/car/hyundai/nexo_med.py", nexo_med),
   ("selfdrive/ui/layouts/main.py", main_ui),
   ("selfdrive/ui/onroad/hud_renderer.py", hud),
@@ -27,6 +32,7 @@ for path, source in (
   ("selfdrive/ui/onroad/exp_button.py", exp_button),
   ("selfdrive/ui/mici/onroad/augmented_road_view.py", mici_view),
   ("selfdrive/ui/mici/onroad/hud_renderer.py", mici_hud),
+  ("system/nexo_web/web_carrot_ui.py", web_ui),
 ):
   ast.parse(source, filename=path)
 
@@ -59,6 +65,25 @@ for token in (
 ):
   if token not in controlsd:
     raise SystemExit(f"NEXO MED actuation gate missing: {token}")
+
+# The web speed switch must drive the published runtime mode, not merely save a
+# setting file that no onroad process reads.
+for token in (
+  "NexoExperimentalModeController",
+  "load_nexo_experimental_speed_settings()",
+  "self.update_experimental_mode(CS)",
+  "speed_control_active=bool(CS.cruiseState.enabled)",
+  "cruise_available=bool(CS.cruiseState.available)",
+):
+  if token not in selfdrived:
+    raise SystemExit(f"NEXO runtime Experimental Mode switch missing: {token}")
+
+for token in (
+  'return "SPEED" if speed_control_active else "MED"',
+  "return bool(speed_control_active and actual_experimental)",
+):
+  if token not in nexo_experimental:
+    raise SystemExit(f"NEXO MED UI state helper missing: {token}")
 
 for token in (
   "gear_box_width=30",
@@ -119,8 +144,25 @@ for token in (
   'text = "EXP"',
   "self.gear_text = self._gear_label(car_state.gearShifter)",
   "self._draw_gear(rect)",
+  "self._draw_med_badge(button_x, button_y)",
 ):
   if token not in hud:
     raise SystemExit(f"NEXO XPlus HUD contract missing: {token}")
 
-print("NEXO MED/startup/Home/turn/EXP/gear UI contract PASS")
+for token in (
+  "nexo_experimental_icon_visible",
+  "self._draw_med_phase(rect)",
+):
+  if token not in mici_hud:
+    raise SystemExit(f"NEXO Mici MED/EXP HUD contract missing: {token}")
+
+for token in (
+  "MED 모드 사용 방법",
+  "브레이크 / CANCEL",
+  "후진 안전 경계",
+  "MED 속도 제어",
+):
+  if token not in web_ui:
+    raise SystemExit(f"NEXO MED web guide/status missing: {token}")
+
+print("NEXO MED/runtime/startup/Home/turn/EXP/gear/web UI contract PASS")

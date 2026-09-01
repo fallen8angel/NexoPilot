@@ -95,6 +95,16 @@ def _firmware_status() -> dict[str, object]:
   return status
 
 
+def _nexo_drive_mode(car_info: object, car_state: object) -> str:
+  if not isinstance(car_info, dict) or car_info.get("longitudinal") != "활성":
+    return "순정 ACC / 일반 크루즈"
+  if not isinstance(car_state, dict) or not car_state.get("seen"):
+    return "MED 상태 확인 중"
+  if not car_state.get("cruiseAvailable"):
+    return "MED 꺼짐"
+  return "MED 속도 제어" if car_state.get("cruiseEnabled") else "MED 대기 · 조향"
+
+
 def live_status(core) -> dict[str, object]:
   params = Params()
   result: dict[str, object] = {
@@ -142,6 +152,7 @@ def live_status(core) -> dict[str, object]:
         "state": _enum_name(ss.state),
         "enabled": bool(ss.enabled),
         "active": bool(ss.active),
+        "experimentalMode": bool(ss.experimentalMode),
         "alert1": str(ss.alertText1),
         "alert2": str(ss.alertText2),
       }
@@ -279,7 +290,7 @@ def dashboard_page(core, message: str = "", fetch_update: bool = False) -> str:
   car_info = status["car"]
   fw = status["firmware"]
 
-  mode = "오픈파일럿 롱컨" if car_info.get("longitudinal") == "활성" else "순정 ACC / 일반 크루즈"
+  mode = _nexo_drive_mode(car_info, cs)
   safety = f"{panda.get('safetyModel','-')}({panda.get('safetyParam','-')})" if panda.get("seen") else "확인 불가"
   fault_text = ", ".join(panda.get("faults", [])) if panda.get("faults") else "없음"
   radar_text = "정상 후보" if radar.get("seen") and not any(radar.get(k) for k in ("canError", "radarFault", "wrongConfig", "temporary")) else "확인 필요"
@@ -331,6 +342,14 @@ def settings_page(core, message: str = "") -> str:
   long_note = "롱컨 활성 시 적용" if core.param_bool(params, "AlphaLongitudinalEnabled") else "현재 일반 크루즈이므로 저장은 가능하지만 순정 ACC에는 적용되지 않음"
 
   return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NexoPilot 설정</title><style>{_css(core)}</style></head><body><main><div class="hero"><div class="eyebrow">CARROT-STYLE SETTINGS</div><h1>차량 설정</h1><div class="mini">설정 변경은 P + 완전 정지 + 크루즈/오픈파일럿 비활성 상태에서만 허용됩니다.</div></div>{_message(message)}
+  <div class="section-title">MED 모드 사용 방법</div><div class="card">
+    <div class="row"><div><div class="title">1 · MODE</div><div class="desc">MED 대기로 들어가 조향 보조를 준비합니다. 계기판에는 파란 MED가 표시됩니다.</div></div><span class="value">MED</span></div>
+    <div class="row"><div><div class="title">2 · SET / RES</div><div class="desc">SET은 현재 속도를 목표로 시작하고, RES는 저장된 목표 속도를 복원합니다. 속도 제어 중에는 초록 SPEED가 표시됩니다.</div></div><span class="value">SPEED</span></div>
+    <div class="row"><div><div class="title">속도 조절</div><div class="desc">짧게 누르면 1km/h, 길게 누르면 10km/h 단위로 목표 속도를 조절합니다.</div></div><span class="value">1 / 10</span></div>
+    <div class="row"><div><div class="title">브레이크 / CANCEL</div><div class="desc">브레이크 또는 첫 CANCEL은 속도 제어만 해제하고 MED 대기로 돌아갑니다. MED 대기에서 CANCEL을 한 번 더 누르거나 MODE를 누르면 완전히 꺼집니다.</div></div></div>
+    <div class="row"><div><div class="title">후진 안전 경계</div><div class="desc">R에서는 조향·속도 제어가 즉시 중지됩니다. D/L로 돌아온 뒤 SET 또는 RES를 새로 눌러야 다시 시작됩니다.</div></div><span class="pill bad">자동 재개 안 함</span></div>
+    <div class="mini">EXP 표시는 실제 실험 모드 상태를 뜻합니다. 아래 자동 전환을 켜면 MED 속도 제어 중 기준 속도 아래에서 EXP, 기준 속도 위에서 일반 모드로 전환됩니다.</div>
+  </div>
   <div class="section-title">차량</div><div class="card"><form method="post" action="/vehicle"><select name="vehicle"><option value="auto"{' selected' if not forced else ''}>자동 인식</option><option value="nexo"{' selected' if forced else ''}>현대 넥쏘 1세대</option></select><button>차량 선택 저장</button></form><div class="row"><div><div class="title">레이더 트랙</div><div class="desc">넥쏘에서는 자동 관리합니다. 안전상 별도 ON/OFF 메뉴를 두지 않습니다.</div></div><span class="value">자동</span></div></div>
   {''.join(sections)}
   <div class="section-title">롱컨 성향</div><div class="card"><div class="title">주행 성향</div><div class="desc">공격적 / 표준 / 여유. {html.escape(long_note)}</div><div class="personality">{personality_buttons}</div></div>
