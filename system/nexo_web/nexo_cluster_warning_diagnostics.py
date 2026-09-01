@@ -214,15 +214,19 @@ def _collect_snapshot(duration: float = 0.7) -> dict[str, object]:
   return result
 
 
-def _vehicle_signal(snapshot: dict[str, object], message: str, signal: str):
+def _signal_for_sources(snapshot: dict[str, object], message: str, signal: str, sources: Iterable[int]):
   can = snapshot.get("can")
   if not isinstance(can, dict):
     return None
-  for source in (0, 1, 2, 128, 129, 130, 131):
+  for source in sources:
     values = can.get((source, message))
     if isinstance(values, dict) and signal in values:
       return values[signal]
   return None
+
+
+def _vehicle_signal(snapshot: dict[str, object], message: str, signal: str):
+  return _signal_for_sources(snapshot, message, signal, (0, 1, 2, 128, 129, 130, 131))
 
 
 def _frame_summary(snapshot: dict[str, object], message: str) -> str:
@@ -332,10 +336,14 @@ def cluster_warning_report(core, report: str) -> str:
 
   acc_fail = _vehicle_signal(snapshot, "SCC12", "ACCFailInfo")
   takeover_req = _vehicle_signal(snapshot, "SCC12", "TakeOverReq")
-  fca_status = _vehicle_signal(snapshot, "FCA11", "FCA_Status")
   fca_warn = _vehicle_signal(snapshot, "FCA11", "CF_VSM_Warn")
-  fca_usm = _vehicle_signal(snapshot, "FCA12", "FCA_USM")
-  fca_driver_state = _vehicle_signal(snapshot, "FCA12", "FCA_DrvSetState")
+  # Never mix physical stock FCA state with Panda's accepted openpilot echo.
+  # Both can legitimately coexist during a snapshot and have different values.
+  stock_fca_status = _signal_for_sources(snapshot, "FCA11", "FCA_Status", (0,))
+  stock_fca_usm = _signal_for_sources(snapshot, "FCA12", "FCA_USM", (0,))
+  op_fca_status = _signal_for_sources(snapshot, "FCA11", "FCA_Status", range(128, 192))
+  op_fca_usm = _signal_for_sources(snapshot, "FCA12", "FCA_USM", range(128, 192))
+  op_fca_driver_state = _signal_for_sources(snapshot, "FCA12", "FCA_DrvSetState", range(128, 192))
   mdps_fault = _vehicle_signal(snapshot, "MDPS12", "CF_Mdps_ToiFlt")
   mdps_unavailable = _vehicle_signal(snapshot, "MDPS12", "CF_Mdps_ToiUnavail")
   if isinstance(acc_fail, (int, float)) and acc_fail != 0:
@@ -348,16 +356,16 @@ def cluster_warning_report(core, report: str) -> str:
     caution.append(f"SCC12 TakeOverReq={takeover_req}")
   if isinstance(fca_warn, (int, float)) and fca_warn != 0:
     caution.append(f"FCA11 CF_VSM_Warn={fca_warn}")
-  if isinstance(fca_status, (int, float)) and fca_status == 0 and fca_usm not in (None, 1):
+  if isinstance(op_fca_status, (int, float)) and op_fca_status == 0 and op_fca_usm not in (None, 1):
     caution.append(
-      f"FCA 상태 조합 불일치: FCA_Status=0인데 FCA_USM={fca_usm} (현행 XPlus 기준은 0/1)"
+      f"openpilot FCA 상태 조합 불일치: FCA_Status=0인데 FCA_USM={op_fca_usm} (현행 XPlus 기준은 0/1)"
     )
-  if fca_status is None and isinstance(fca_usm, (int, float)):
-    caution.append("FCA11 상태 스트림 없음: FCA12만 송신되어 계기판 통신 단절 경고가 켜질 수 있음")
-  if isinstance(fca_usm, (int, float)) and fca_usm not in (0, 1):
-    caution.append(f"FCA12 FCA_USM={fca_usm}: 알려진 NEXO/AI 기준값(0 또는 1) 밖의 상태")
-  if isinstance(fca_driver_state, (int, float)) and fca_driver_state != 2:
-    caution.append(f"FCA12 FCA_DrvSetState={fca_driver_state}: 운전자 FCA 설정 상태 불일치")
+  if op_fca_status is None and isinstance(op_fca_usm, (int, float)):
+    caution.append("openpilot FCA11 상태 스트림 없음: FCA12만 송신되어 계기판 통신 단절 경고가 켜질 수 있음")
+  if isinstance(op_fca_usm, (int, float)) and op_fca_usm != 1:
+    caution.append(f"openpilot FCA12 FCA_USM={op_fca_usm}: 현행 XPlus 기준값 1과 불일치")
+  if isinstance(op_fca_driver_state, (int, float)) and op_fca_driver_state != 2:
+    caution.append(f"openpilot FCA12 FCA_DrvSetState={op_fca_driver_state}: 운전자 FCA 설정 상태 불일치")
 
   can_snapshot = snapshot.get("can") if isinstance(snapshot.get("can"), dict) else {}
   stock_fca_present = any(
@@ -368,7 +376,12 @@ def cluster_warning_report(core, report: str) -> str:
     128 <= source < 192 and message == "FCA11"
     for source, message in can_snapshot
   )
-  xplus_state_match = openpilot_fca11_present and fca_status == 0 and fca_usm == 1 and fca_driver_state == 2
+  openpilot_fca12_present = any(
+    128 <= source < 192 and message == "FCA12"
+    for source, message in can_snapshot
+  )
+  xplus_state_match = (openpilot_fca11_present and openpilot_fca12_present and
+                       op_fca_status == 0 and op_fca_usm == 1 and op_fca_driver_state == 2)
 
   # Deduplicate while preserving the first and therefore most useful observation.
   critical = list(dict.fromkeys(critical))
@@ -406,9 +419,10 @@ def cluster_warning_report(core, report: str) -> str:
     *(("", "[현재 기어·정지 상태에서 정상으로 제외한 항목]", *(f"- 정보: {item}" for item in normal_context)) if normal_context else ()),
     "",
     "[XPlus식 NEXO 롱컨 FCA 상태 확인]",
-    f"현행 XPlus 상태조합 일치={xplus_state_match} (FCA_Status={fca_status}, FCA_USM={fca_usm}, FCA_DrvSetState={fca_driver_state})",
-    f"openpilot FCA11 상태 스트림 송신={openpilot_fca11_present}",
+    f"현행 XPlus openpilot 상태조합 일치={xplus_state_match} (FCA_Status={op_fca_status}, FCA_USM={op_fca_usm}, FCA_DrvSetState={op_fca_driver_state})",
+    f"openpilot FCA11/FCA12 상태 스트림 송신={openpilot_fca11_present}/{openpilot_fca12_present}",
     f"물리 source0 순정 FCA 잔존={stock_fca_present}",
+    f"물리 source0 순정 상태(참고용): FCA_Status={stock_fca_status}, FCA_USM={stock_fca_usm}",
     f"FCA11 프레임: {_frame_summary(snapshot, 'FCA11')}",
     f"FCA12 프레임: {_frame_summary(snapshot, 'FCA12')}",
     ("판정: 현행 XPlus의 NEXO 상태 조합과 일치합니다. 완전 전원 재시작 후 계기판 경고 소등을 확인하세요."

@@ -48,8 +48,8 @@ def manager():
   return NexoMedStateManager(ButtonType, BUTTONS, create_button_events, 1.0 / 3.6, 1.609344)
 
 
-def update(mgr, state, main=0, button=0, driving=True, events=None):
-  return mgr.update(state, main, button, True, events or [], driving)
+def update(mgr, state, main=0, button=0, driving=True, reverse=False, events=None):
+  return mgr.update(state, main, button, True, events or [], driving, reverse)
 
 
 def enter_med(mgr, state, driving=True):
@@ -153,6 +153,42 @@ def test_non_driving_gear_blocks_speed_and_reentering_drive_requests_enable():
   assert state.cruiseState.enabled
 
 
+def test_reverse_requires_fresh_set_or_resume_before_med_reengages():
+  mgr = manager()
+  state = car_state()
+  enter_med(mgr, state)
+  assert mgr.consume_enable_pulse()
+  tap(mgr, state, 2)
+  assert state.cruiseState.enabled
+
+  update(mgr, state, driving=False, reverse=True)
+  mgr.apply_to_car_state(state)
+  assert mgr.reverse_reengage_required
+  assert state.cruiseState.available
+  assert not state.cruiseState.enabled
+  assert not mgr.consume_enable_pulse()
+
+  # Returning to Drive and even cycling MODE must not auto-resume MED.
+  update(mgr, state, driving=True)
+  assert not mgr.consume_enable_pulse()
+  update(mgr, state, main=1, driving=True,
+         events=[ButtonEvent(True, ButtonType.mainCruise)])
+  update(mgr, state, main=0, driving=True,
+         events=[ButtonEvent(False, ButtonType.mainCruise)])
+  update(mgr, state, main=1, driving=True,
+         events=[ButtonEvent(True, ButtonType.mainCruise)])
+  update(mgr, state, main=0, driving=True,
+         events=[ButtonEvent(False, ButtonType.mainCruise)])
+  assert state.cruiseState.available
+  assert mgr.reverse_reengage_required
+  assert not mgr.consume_enable_pulse()
+
+  tap(mgr, state, 1, driving=True)
+  assert not mgr.reverse_reengage_required
+  assert state.cruiseState.enabled
+  assert mgr.consume_enable_pulse()
+
+
 def test_boot_high_mode_value_does_not_arm_med():
   mgr = manager()
   state = car_state()
@@ -182,6 +218,9 @@ class TestNexoMedStateManager(unittest.TestCase):
 
   def test_startup_main_guard(self):
     test_boot_high_mode_value_does_not_arm_med()
+
+  def test_reverse_reengage_guard(self):
+    test_reverse_requires_fresh_set_or_resume_before_med_reengages()
 
 
 if __name__ == "__main__":

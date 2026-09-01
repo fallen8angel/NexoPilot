@@ -36,6 +36,14 @@ ROAD_CAM_MIN_SPEED = 10  # m/s (25 mph)
 CAM_Y_OFFSET = 20
 
 
+def driver_monitoring_position(wheel_bounds, dmoji_size: int) -> tuple[int, int]:
+  """Place DMoji immediately to the right of the steering-wheel icon."""
+  gap = 8
+  x = int(wheel_bounds.x + wheel_bounds.width + gap)
+  y = int(wheel_bounds.y + (wheel_bounds.height - dmoji_size) / 2)
+  return x, y
+
+
 class BookmarkIcon(Widget):
   PEEK_THRESHOLD = 50  # If icon peeks out this much, snap it fully visible
   FULL_VISIBLE_OFFSET = 200  # How far onscreen when fully visible
@@ -222,7 +230,9 @@ class AugmentedRoadView(CameraView):
     should_draw_dmoji = (not self._hud_renderer.drawing_top_icons() and
                          (ui_state.status != UIStatus.DISENGAGED or ui_state.always_on_dm))
     self._driver_state_renderer.set_should_draw(should_draw_dmoji)
-    self._driver_state_renderer.set_position(self._rect.x + 16, self._rect.y + 10)
+    wheel_bounds = self._hud_renderer.steering_wheel_bounds(self._content_rect)
+    dmoji_x, dmoji_y = driver_monitoring_position(wheel_bounds, self._driver_state_renderer.BASE_SIZE)
+    self._driver_state_renderer.set_position(dmoji_x, dmoji_y)
     self._driver_state_renderer.render()
 
     self._hud_renderer.set_can_draw_top_icons(alert_to_render is None)

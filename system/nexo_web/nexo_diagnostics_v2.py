@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import json
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -22,9 +22,14 @@ NEXO_SCC_RESTORE_LOG = Path("/data/nexo_scc_restore.log")
 NEXO_SCC_ADDRS = frozenset((0x389, 0x420, 0x421, 0x50A))
 NEXO_FCA_ADDRS = frozenset((0x38D, 0x483))
 NEXO_DIAGNOSTIC_ADDRS = NEXO_SCC_ADDRS | NEXO_FCA_ADDRS | frozenset((0x4A2,))
+PARKING_SENSOR_ADDRS = frozenset((0x436, 0x4F4))
+VEHICLE_NAVI_ADDRS = frozenset((0x544, 0x4B4, 0x4B9, 0x4BE))
+OBSERVATION_ONLY_ADDRS = PARKING_SENSOR_ADDRS | VEHICLE_NAVI_ADDRS
 WATCHED = {
   0x389: "SCC14", 0x38D: "FCA11", 0x420: "SCC11", 0x421: "SCC12",
   0x483: "FCA12", 0x4A2: "FRT_RADAR11", 0x50A: "SCC13",
+  0x436: "PAS11", 0x4F4: "SPAS12", 0x544: "Navi_HU",
+  0x4B4: "NAVI_CANFD_4B4", 0x4B9: "NAVI_CANFD_4B9", 0x4BE: "NAVI_CANFD_4BE",
 }
 SELECTED_SIGNALS = {
   0x420: ("MainMode_ACC", "ObjValid", "ACC_ObjStatus", "ACC_ObjRelSpd", "ACC_ObjDist", "AliveCounterACC"),
@@ -33,6 +38,20 @@ SELECTED_SIGNALS = {
   0x38D: ("FCA_Status", "CF_VSM_Warn", "CR_FCA_Alive", "CR_FCA_ChkSum"),
   0x483: ("FCA_USM", "FCA_DrvSetState"),
   0x50A: ("SCCDrvModeRValue", "SCC_Equip", "Lead_Veh_Dep_Alert_USM"),
+  0x436: (
+    "CF_Gway_PASDisplayFLH", "CF_Gway_PASDisplayFRH", "CF_Gway_PASDisplayFCTR",
+    "CF_Gway_PASDisplayRLH", "CF_Gway_PASDisplayRRH", "CF_Gway_PASDisplayRCTR",
+    "CF_Gway_PASFsound", "CF_Gway_PASRsound", "CF_Gway_PASSystemOn",
+    "CF_Gway_PASCheckSound", "CF_Gway_PASDistance",
+  ),
+  0x4F4: (
+    "CF_Spas_FIL_Ind", "CF_Spas_FIR_Ind", "CF_Spas_FOL_Ind", "CF_Spas_FOR_Ind",
+    "CF_Spas_RIL_Ind", "CF_Spas_RIR_Ind", "CF_Spas_ROL_Ind", "CF_Spas_ROR_Ind",
+    "CF_Spas_FI_Ind", "CF_Spas_RI_Ind", "CF_Spas_FLS_Alarm", "CF_Spas_FCS_Alarm",
+    "CF_Spas_FRS_Alarm", "CF_Spas_FR_Alarm", "CF_Spas_RR_Alarm", "CF_Spas_RLS_Alarm",
+    "CF_Spas_RCS_Alarm", "CF_Spas_BEEP_Alarm", "CF_Spas_StatAlarm",
+  ),
+  0x544: ("SpeedLim_Nav_Clu", "SpeedLim_Nav_General", "SpeedLim_Nav_Cam"),
 }
 _DIAG_DBC = None
 
@@ -67,6 +86,27 @@ def decode_payload(address: int, dat: bytes) -> str:
     return ", ".join(output) if output else "선택 신호 없음"
   except Exception as error:
     return f"DBC 해석 실패: {error}"
+
+
+def decode_values(address: int, dat: bytes) -> dict[str, int | float]:
+  """Decode selected observation values without ever transmitting CAN."""
+  values: dict[str, int | float] = {}
+  try:
+    message = _dbc().addr_to_msg.get(address)
+    if message is None:
+      return values
+    for name in SELECTED_SIGNALS.get(address, ()):
+      signal = message.sigs.get(name)
+      if signal is None:
+        continue
+      raw = get_raw_value(dat, signal)
+      if signal.is_signed:
+        raw -= ((raw >> (signal.size - 1)) & 1) * (1 << signal.size)
+      value = raw * signal.factor + signal.offset
+      values[name] = int(value) if float(value).is_integer() else round(float(value), 3)
+  except Exception:
+    pass
+  return values
 
 
 def _json_log(path: Path) -> dict[str, object] | None:
@@ -181,6 +221,91 @@ def _flow_lines(requested: Counter[int], counts: Counter[tuple[int, int]]) -> li
   return lines
 
 
+def parking_sensor_verdict_lines(addresses_resolved: bool, any_raw: bool, any_payload_change: bool,
+                                 any_decoded_change: bool, any_nonzero: bool) -> tuple[str, ...]:
+  if any_decoded_change:
+    return ("[주차센서 신호 확인] 위치별 표시·경고 값이 실제로 변했습니다.",)
+  if any_nonzero:
+    return ("[주차센서 활성 후보] 주차센서 관련 값은 수신됐지만 8초 동안 단계 변화는 없었습니다.",)
+  if any_payload_change:
+    return ("[DBC 재확인 필요] 원본 데이터는 변했지만 현재 DBC의 주차센서 값 변화로 해독되지 않았습니다.",)
+  if any_raw:
+    return (
+      "[현재 신호로 상태 판정 불가] SPAS12·PAS11 후보 메시지는 수신됐지만 원본·해독 값이 고정돼 있었습니다.",
+      "값이 0이라는 이유만으로 주차센서가 꺼졌다고 판단하지 않습니다. OFF·ON 또는 장애물 거리를 바꿔 다시 수집하세요.",
+    )
+  if not addresses_resolved:
+    return ("[DBC 확인 필요] SPAS12·PAS11 주소를 해석하지 못했습니다.",)
+  return ("[버스/메시지 확인 필요] SPAS12·PAS11 원본 CAN을 관측하지 못했습니다.",)
+
+
+def _parking_sensor_lines(counts: Counter[tuple[int, int]], latest: dict[tuple[int, int], bytes],
+                          payloads: dict[tuple[int, int], set[bytes]],
+                          decoded_states: dict[tuple[int, int], set[tuple[tuple[str, int | float], ...]]]) -> list[str]:
+  keys = sorted(key for key in counts if key[1] in PARKING_SENSOR_ADDRS)
+  lines = [
+    "[전·후방 주차센서 CAN 후보 신호 · 읽기 전용]",
+    "※ SPAS12·PAS11은 DBC 후보입니다. 수동 주차 버튼 입력 유무를 판정 근거로 사용하지 않습니다.",
+  ]
+  for source, address in keys:
+    key = (source, address)
+    lines.append(
+      f"src={source:3d} {WATCHED[address]} 0x{address:03X}: RX={counts[key]} "
+      f"payload종류={len(payloads[key])} 해독상태종류={len(decoded_states[key])} | "
+      f"{decode_payload(address, latest[key])}"
+    )
+
+  any_raw = bool(keys)
+  any_payload_change = any(len(payloads[key]) > 1 for key in keys)
+  any_decoded_change = any(len(decoded_states[key]) > 1 for key in keys)
+  any_nonzero = any(
+    any(value != 0 for _, value in state)
+    for key in keys for state in decoded_states[key]
+  )
+  if not keys:
+    lines.append("SPAS12·PAS11 원본 CAN 관측 없음")
+  lines.extend(parking_sensor_verdict_lines(True, any_raw, any_payload_change, any_decoded_change, any_nonzero))
+  lines.append("※ 이 진단은 CAN·UDS를 송신하거나 차량 설정을 변경하지 않습니다.")
+  return lines
+
+
+def _vehicle_navi_lines(counts: Counter[tuple[int, int]], latest: dict[tuple[int, int], bytes],
+                        payloads: dict[tuple[int, int], set[bytes]], can_frame_total: int) -> list[str]:
+  keys = sorted(key for key in counts if key[1] in VEHICLE_NAVI_ADDRS)
+  lines = [
+    "[순정 내비 vNAVI 호환성 · 읽기 전용]",
+    "※ 순정 내비에 과속카메라 또는 방지턱 안내가 표시되는 동안 실행해야 가장 정확합니다.",
+  ]
+  for source, address in keys:
+    key = (source, address)
+    decoded = decode_payload(address, latest[key]) if address == 0x544 else "DBC 선택 신호 없음"
+    lines.append(
+      f"src={source:3d} {WATCHED[address]} 0x{address:03X}: RX={counts[key]} "
+      f"payload종류={len(payloads[key])} | {decoded}"
+    )
+
+  classic_keys = [key for key in keys if key[1] == 0x544]
+  canfd_seen = any(address in (0x4B4, 0x4B9, 0x4BE) for _, address in keys)
+  camera_active = False
+  for key in classic_keys:
+    values = decode_values(0x544, latest[key])
+    limit = values.get("SpeedLim_Nav_Clu", 0)
+    camera_active = camera_active or values.get("SpeedLim_Nav_Cam") == 1 and isinstance(limit, (int, float)) and 0 < limit < 255
+
+  if camera_active:
+    lines.append("[넥쏘 vNAVI 신호 확인] Navi_HU 0x544에서 활성 카메라와 제한속도가 함께 관측되었습니다.")
+  elif classic_keys:
+    lines.append("[넥쏘 내비 신호 확인 · 재점검 필요] Navi_HU 0x544는 수신됐지만 활성 카메라 상태는 관측되지 않았습니다.")
+  elif canfd_seen:
+    lines.append("[CAN-FD 내비 후보 확인] 후보 프레임이 관측됐습니다. NEXO classic-CAN 0x544와 별도로 해석해야 합니다.")
+  elif can_frame_total:
+    lines.append("[현재 미관측] 차량 CAN은 수신됐지만 내비 후보 ID 0x544/0x4B4/0x4B9/0x4BE는 보이지 않았습니다.")
+  else:
+    lines.append("[판정 보류] raw CAN이 없어 vNAVI 지원 여부를 판정하지 않습니다.")
+  lines.append("※ 이 진단은 수신 신호만 관측하며 CAN·UDS 송신이나 vNAVI 설정 변경을 하지 않습니다.")
+  return lines
+
+
 def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
   started = time.monotonic()
   wall_time = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -190,6 +315,9 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
   requested: Counter[int] = Counter()
   counts: Counter[tuple[int, int]] = Counter()
   latest: dict[tuple[int, int], bytes] = {}
+  observation_payloads: dict[tuple[int, int], set[bytes]] = defaultdict(set)
+  observation_decoded: dict[tuple[int, int], set[tuple[tuple[str, int | float], ...]]] = defaultdict(set)
+  can_frame_total = 0
   timeline = []
   previous = None
   first_acc_fault_at = None
@@ -201,9 +329,17 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     if event is not None:
       for frame in event.can:
         address, source = int(frame.address), int(frame.src)
+        can_frame_total += 1
         if address in WATCHED or 0x500 <= address <= 0x51F:
           counts[(source, address)] += 1
           latest[(source, address)] = bytes(frame.dat)
+          if address in OBSERVATION_ONLY_ADDRS:
+            key = (source, address)
+            if len(observation_payloads[key]) < 64:
+              observation_payloads[key].add(bytes(frame.dat))
+            decoded = tuple(decode_values(address, bytes(frame.dat)).items())
+            if decoded and len(observation_decoded[key]) < 64:
+              observation_decoded[key].add(decoded)
 
     try:
       cs = sm["carState"]
@@ -282,7 +418,7 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
     "※ src=128~191은 Panda가 돌려준 openpilot TX echo/accepted이며 물리 bus=src-128입니다.",
     "※ src>=192는 Panda safety가 거부한 TX이며 물리 bus=src-192입니다. 현재 CAN 메타데이터는 C safety hook의 세부 거부 사유 코드를 싣지 않으므로 address/payload와 controlsAllowed/safetyModel/safetyParam을 함께 확인합니다.",
     "", "[sendcan 요청 → Panda 결과]", *_flow_lines(requested, counts),
-    "", "[SCC/FCA/레이더 CAN 집계]",
+    "", "[SCC/FCA/레이더/관측 CAN 집계]",
   ]
   for (source, address), count in sorted(counts.items()):
     data = latest[(source, address)]
@@ -298,6 +434,9 @@ def longitudinal_blackbox_output(core, duration: float = 8.0) -> str:
       lines.append(f"src={source:3d} 0x{address:03X}: {decode_payload(address, data)}")
   if not decoded:
     lines.append("해석할 SCC/FCA 메시지가 없습니다.")
+
+  lines.extend(["", *_parking_sensor_lines(counts, latest, observation_payloads, observation_decoded)])
+  lines.extend(["", *_vehicle_navi_lines(counts, latest, observation_payloads, can_frame_total)])
 
   lines.extend(["", "[롱컨 초기화·UDS 추적]", core.nexo_long_init_output()])
   lines.extend(["", "[card 런타임 상태]", runtime_status_output(core)])

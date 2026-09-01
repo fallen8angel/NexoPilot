@@ -242,6 +242,10 @@ def validate_controlsd() -> None:
     "self.enable_pulse = driving_gear",
     "self.suppress_cancel_until_release = True",
     "if not driving_gear: self.enabled = False",
+    "self.reverse_reengage_required = True",
+    "driving_gear and not self.prev_driving_gear and not self.reverse_reengage_required",
+    "self.reverse_reengage_required = False",
+    "self.enable_pulse = True",
     "car_state.cruiseState.enabled = bool(self.available and self.enabled)",
   )
   for token in manager_required:

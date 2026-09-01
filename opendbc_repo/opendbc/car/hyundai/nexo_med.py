@@ -9,7 +9,9 @@ buttons own this state instead:
    +--------------------CANCEL---------------+
 
 The first CANCEL returns to steering-only MED_WAIT. A second CANCEL turns the
-MED selection off. Longitudinal activation is accepted only in D/L.
+MED selection off. Longitudinal activation is accepted only in D/L. Entering
+reverse is a hard boundary: returning to D/L cannot resume MED until the driver
+presses SET/RES again.
 """
 from __future__ import annotations
 
@@ -40,6 +42,7 @@ class NexoMedStateManager:
     self.prev_raw_main = 0
     self.enable_pulse = False
     self.prev_driving_gear = False
+    self.reverse_reengage_required = False
 
     self.prev_raw_button = 0
     self.held_button = 0
@@ -70,6 +73,12 @@ class NexoMedStateManager:
                           driving_gear: bool, long_press: bool = False) -> None:
     if not self.available or not driving_gear:
       return
+
+    if self.reverse_reengage_required:
+      # SET/RES is the only acknowledgement accepted after reverse. Re-enable
+      # selfdrived and MED in the same update that starts speed control.
+      self.reverse_reengage_required = False
+      self.enable_pulse = True
 
     current_kph = self._current_speed_kph(car_state)
     step = self._step_kph(is_metric, long_press)
@@ -135,11 +144,20 @@ class NexoMedStateManager:
     return event_type, bool(event.pressed)
 
   def update(self, car_state, raw_main: int, raw_button: int, is_metric: bool,
-             decoded_events, driving_gear: bool) -> list:
+             decoded_events, driving_gear: bool, reverse_gear: bool = False) -> list:
     """Update MED state and return de-duplicated physical button events."""
     raw_main = int(raw_main)
     raw_button = int(raw_button)
     driving_gear = bool(driving_gear)
+    reverse_gear = bool(reverse_gear)
+
+    if reverse_gear:
+      # Never allow leaving R to revive the retained MED selection
+      # automatically. MODE selection and the retained set speed stay visible,
+      # but both steering and speed actuation require a fresh SET/RES in D/L.
+      self.reverse_reengage_required = True
+      self.enabled = False
+      self.enable_pulse = False
 
     # Ignore a boot-time high/stuck MODE value until the physical line has been
     # observed released for several frames.
@@ -159,12 +177,12 @@ class NexoMedStateManager:
       else:
         self.available = True
         self.enabled = False
-        self.enable_pulse = driving_gear
+        self.enable_pulse = driving_gear and not self.reverse_reengage_required
     self.prev_raw_main = raw_main
 
     # If MODE was deliberately selected outside D/L, retain that selection and
     # create one enable request when the driver later returns to a forward gear.
-    if self.available and driving_gear and not self.prev_driving_gear:
+    if self.available and driving_gear and not self.prev_driving_gear and not self.reverse_reengage_required:
       self.enable_pulse = True
 
     try:

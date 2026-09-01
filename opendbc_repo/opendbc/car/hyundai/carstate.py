@@ -302,6 +302,7 @@ class CarState(CarStateBase):
         self.is_metric,
         ret.buttonEvents,
         driving_gear,
+        ret.gearShifter == structs.CarState.GearShifter.reverse,
       )
       self.nexo_med.apply_to_car_state(ret)
 
@@ -319,8 +320,8 @@ class CarState(CarStateBase):
 
   def update_button_enable(self, button_events):
     if self.nexo_med is not None:
-      # MODE enters and enables the lateral MED session. SET/RES only changes
-      # the manager's independent speed-control state.
+      # MODE enters the lateral MED session. After reverse, only a fresh SET/RES
+      # can emit the enable pulse and restore either steering or speed control.
       return self.nexo_med.consume_enable_pulse()
     return super().update_button_enable(button_events)
 

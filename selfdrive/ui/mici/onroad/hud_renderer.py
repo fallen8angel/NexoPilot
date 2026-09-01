@@ -167,6 +167,16 @@ class HudRenderer(Widget):
     # whether we're drawing any top icons currently
     return bool(self._set_speed_alpha_filter.x > 1e-2)
 
+  def steering_wheel_bounds(self, rect: rl.Rectangle) -> rl.Rectangle:
+    """Return the steering-wheel bounds shared with the DMoji layout."""
+    wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
+    return rl.Rectangle(
+      rect.x + 21,
+      rect.y + rect.height - 14 - wheel_txt.height + self._wheel_y_filter.x,
+      wheel_txt.width,
+      wheel_txt.height,
+    )
+
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
@@ -281,9 +291,10 @@ class HudRenderer(Widget):
       self._wheel_alpha_filter.update(0)
       self._wheel_y_filter.update(wheel_txt.height / 2)
 
-    # pos
-    pos_x = int(rect.x + 21 + wheel_txt.width / 2)
-    pos_y = int(rect.y + rect.height - 14 - wheel_txt.height / 2 + self._wheel_y_filter.x)
+    # Keep wheel and DMoji anchored to one shared layout rectangle.
+    wheel_bounds = self.steering_wheel_bounds(rect)
+    pos_x = int(wheel_bounds.x + wheel_bounds.width / 2)
+    pos_y = int(wheel_bounds.y + wheel_bounds.height / 2)
     rotation = -ui_state.sm['carState'].steeringAngleDeg
 
     turn_intent_margin = 25

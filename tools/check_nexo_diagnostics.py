@@ -85,7 +85,10 @@ def main() -> None:
   for token in ("[SCC/FCA 분리 자동 판정]", "[sendcan 요청 → Panda 결과]",
                 "[주요 SCC/FCA 신호 DBC 해석]", "last_fault_output",
                 "runtime_status_output", "card_crash_output", "과거 버전 기록",
-                "순정 FCA11/FCA12 수신은 정상"):
+                "순정 FCA11/FCA12 수신은 정상", "PARKING_SENSOR_ADDRS",
+                "VEHICLE_NAVI_ADDRS", "OBSERVATION_ONLY_ADDRS",
+                "parking_sensor_verdict_lines", "[전·후방 주차센서 CAN 후보 신호 · 읽기 전용]",
+                "[순정 내비 vNAVI 호환성 · 읽기 전용]", "CAN·UDS를 송신"):
     require(token in web, f"web diagnostics missing: {token}")
 
   for token in ("NexoPilot 8초 통합진단 - 한눈에 보기", "build_unified_report",
@@ -126,6 +129,8 @@ def main() -> None:
                 "ACCFailInfo", "CF_VSM_Warn", "CF_Mdps_ToiFlt", "steerFaultPermanent",
                 "Panda RX 안전검사 invalid", "계기판 전구 자체를 직접 읽는 기능은 아닙니다",
                 "expected_stationary_events", "expected_reverse_alert",
+                "_signal_for_sources", "Never mix physical stock FCA state",
+                "openpilot FCA11/FCA12 상태 스트림 송신",
                 "현재 기어·정지 상태에서 정상으로 제외한 항목",
                 "prepend_cluster_warning_report"):
     require(token in warning_web, f"cluster warning diagnostics missing: {token}")
@@ -142,7 +147,7 @@ def main() -> None:
                 "communication_control"):
     require(token in takeover, f"post-radar SCC verifier missing: {token}")
 
-  read_only_sources = (unified, guard_web, warning_web, warning_policy, ai_parity)
+  read_only_sources = (web, unified, guard_web, warning_web, warning_policy, ai_parity)
   for forbidden in ("pub_sock(", "disable_ecu", "put_bool(", "schedule_reboot", "git_run(\"merge\""):
     for source in read_only_sources:
       require(forbidden not in source, f"web diagnostics must remain read-only: {forbidden}")
@@ -156,6 +161,8 @@ def main() -> None:
   require("ai_parity_diagnostics.prepend_ai_parity_report" in entry, "AI parity report not wired")
   require("NexoPilotWeb/8.0" in entry, "port 7000 server version not advanced for forensic diagnostics")
   require("8초 통합진단 파일 하나 받기" in entry, "single-file diagnostic button label missing")
+  require("SCC/FCA·주차센서·순정 내비·Panda" in entry,
+          "diagnostic page must disclose parking/navigation observation")
   for token in ("_last_diagnostic_lock", "_last_diagnostic = (capture, filename)",
                 'parsed.path == "/diagnostics/capture"', '"/diagnostics/download-last"',
                 "방금 진단 파일 다시 다운받기",

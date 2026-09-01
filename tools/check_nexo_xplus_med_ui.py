@@ -15,6 +15,8 @@ main_ui = text("selfdrive/ui/layouts/main.py")
 hud = text("selfdrive/ui/onroad/hud_renderer.py")
 onroad_init = text("selfdrive/ui/onroad/__init__.py")
 exp_button = text("selfdrive/ui/onroad/exp_button.py")
+mici_view = text("selfdrive/ui/mici/onroad/augmented_road_view.py")
+mici_hud = text("selfdrive/ui/mici/onroad/hud_renderer.py")
 
 for path, source in (
   ("selfdrive/controls/controlsd.py", controlsd),
@@ -23,12 +25,15 @@ for path, source in (
   ("selfdrive/ui/onroad/hud_renderer.py", hud),
   ("selfdrive/ui/onroad/__init__.py", onroad_init),
   ("selfdrive/ui/onroad/exp_button.py", exp_button),
+  ("selfdrive/ui/mici/onroad/augmented_road_view.py", mici_view),
+  ("selfdrive/ui/mici/onroad/hud_renderer.py", mici_hud),
 ):
   ast.parse(source, filename=path)
 
 # NEXO MED state is owned once from raw CLU11 buttons. It must start OFF, enter
-# MED on MODE, add speed control on SET/RES, retain MED across brake/P/N/R, and
-# implement two-stage CANCEL without leaking the first cancel to selfdrived.
+# MED on MODE, add speed control on SET/RES, retain selection across brake/P/N/R,
+# require fresh SET/RES after reverse, and implement two-stage CANCEL without
+# leaking the first cancel to selfdrived.
 for token in (
   "self.available = False",
   "self.enabled = False",
@@ -36,6 +41,9 @@ for token in (
   "self.enable_pulse = driving_gear",
   "if not driving_gear:",
   "self.enabled = False",
+  "self.reverse_reengage_required = True",
+  "driving_gear and not self.prev_driving_gear and not self.reverse_reengage_required",
+  "self.reverse_reengage_required = False",
   "self.suppress_cancel_until_release = True",
   "car_state.cruiseState.enabled = bool(self.available and self.enabled)",
 ):
@@ -76,6 +84,21 @@ for token in (
 ):
   if token not in exp_button:
     raise SystemExit(f"NEXO rotating cruise wheel contract missing: {token}")
+
+for token in (
+  "def driver_monitoring_position",
+  "wheel_bounds = self._hud_renderer.steering_wheel_bounds(self._content_rect)",
+  "self._driver_state_renderer.BASE_SIZE",
+):
+  if token not in mici_view:
+    raise SystemExit(f"NEXO Mici DMoji layout contract missing: {token}")
+
+for token in (
+  "def steering_wheel_bounds",
+  "wheel_bounds = self.steering_wheel_bounds(rect)",
+):
+  if token not in mici_hud:
+    raise SystemExit(f"NEXO Mici wheel layout contract missing: {token}")
 
 # Startup must visibly begin on Home before normal ignition/onroad routing.
 for token in (
