@@ -46,7 +46,14 @@ def create_lkas11(packer, frame, CP, apply_torque, steer_req,
     values["CF_Lkas_LdwsActivemode"] = int(left_lane) + (int(right_lane) << 1)
     values["CF_Lkas_LdwsOpt_USM"] = 2
     values["CF_Lkas_FcwOpt_USM"] = 2 if enabled else 1
-    values["CF_Lkas_SysWarning"] = 4 if sys_warning else 0
+    # Match XPlus on first-generation NEXO: openpilot steering/LDW alerts stay
+    # on the comma display and must never request the cluster LKAS master
+    # warning. Native EPS/CAN faults still reach the cluster on their factory
+    # messages; this only neutralizes the synthetic LKAS11 warning field.
+    if CP.carFingerprint == CAR.HYUNDAI_NEXO_1ST_GEN:
+      values["CF_Lkas_SysWarning"] = 0
+    else:
+      values["CF_Lkas_SysWarning"] = 4 if sys_warning else 0
 
   elif CP.carFingerprint in (CAR.KIA_OPTIMA_G4, CAR.KIA_OPTIMA_G4_FL):
     values["CF_Lkas_SysWarning"] = 4 if sys_warning else 0

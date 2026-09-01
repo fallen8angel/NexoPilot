@@ -80,6 +80,32 @@ class TestNexoHud(unittest.TestCase):
         assert packer.values["CF_Lkas_LdwsOpt_USM"] == 2
         assert packer.values["CF_Lkas_LdwsActivemode"] == 3
 
+  def test_lkas11_never_requests_nexo_cluster_master_warning(self):
+    original = {
+      "CF_Lkas_LdwsActivemode": 0,
+      "CF_Lkas_LdwsSysState": 0,
+      "CF_Lkas_SysWarning": 4,
+      "CF_Lkas_LdwsLHWarning": 0,
+      "CF_Lkas_LdwsRHWarning": 0,
+      "CF_Lkas_HbaLamp": 0,
+      "CF_Lkas_FcwBasReq": 0,
+      "CF_Lkas_HbaSysState": 0,
+      "CF_Lkas_FcwOpt": 0,
+      "CF_Lkas_HbaOpt": 0,
+      "CF_Lkas_FcwSysState": 0,
+      "CF_Lkas_FcwCollisionWarning": 0,
+      "CF_Lkas_FusionState": 0,
+      "CF_Lkas_FcwOpt_USM": 4,
+      "CF_Lkas_LdwsOpt_USM": 0,
+    }
+    CP = SimpleNamespace(carFingerprint=CAR.HYUNDAI_NEXO_1ST_GEN, flags=0)
+    packer = self.RecordingPacker()
+
+    hyundaican.create_lkas11(packer, 0, CP, 0, False, False, original, True, 3, True,
+                             True, True, False, False)
+
+    assert packer.values["CF_Lkas_SysWarning"] == 0
+
 
 class TestNexoLongitudinalCommands(unittest.TestCase):
   class RecordingPacker:
